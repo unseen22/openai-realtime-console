@@ -237,7 +237,14 @@ export function ConsolePage() {
       const { trackId, offset } = trackSampleOffset;
       await client.cancelResponse(trackId, offset);
     }
-    await wavRecorder.record((data) => client.appendInputAudio(data.mono));
+    await wavRecorder.record((data) => {
+      console.log('Sending audio chunk to server:', {
+        size: data.mono.length,
+        firstSamples: Array.from(data.mono.slice(0, 5)),
+        lastSamples: Array.from(data.mono.slice(-5))
+      });
+      client.appendInputAudio(data.mono);
+    });
   };
 
   /**

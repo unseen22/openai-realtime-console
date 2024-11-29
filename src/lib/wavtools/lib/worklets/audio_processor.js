@@ -117,7 +117,7 @@ class AudioProcessor extends AudioWorkletProcessor {
   }
 
   receive(e) {
-    const { event, id } = e.data;
+    const { event, id, data } = e.data;
     let receiptData = {};
     switch (event) {
       case 'start':
@@ -134,6 +134,14 @@ class AudioProcessor extends AudioWorkletProcessor {
         break;
       case 'read':
         receiptData = this.getValues();
+        break;
+      case 'update':
+        // Convert the incoming data to the format we need
+        const float32Data = data.audio.channels[0];
+        const chunk = [float32Data]; // Single channel format
+        this.chunks.push(chunk);
+        // Send the chunk immediately
+        this.sendChunk(chunk);
         break;
       default:
         break;

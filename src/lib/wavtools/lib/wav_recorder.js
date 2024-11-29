@@ -51,6 +51,66 @@ export class WavRecorder {
       raw: new ArrayBuffer(0),
       mono: new ArrayBuffer(0),
     };
+    // Preloaded instruction audio
+    this._instructionAudio = null;
+  }
+
+  /**
+   * Preloads and preprocesses the instruction WAV file into PCM format
+   * @private
+   * @returns {Promise<void>}
+   */
+  async _preloadInstructionAudio() {
+    try {
+      console.log('Preloading instruction audio...');
+      
+      // Load the WAV file
+      const response = await fetch('/audio_instruct/test_instruct.wav');
+      if (!response.ok) {
+        throw new Error(`Failed to load WAV file: ${response.statusText}`);
+      }
+
+      // Get the raw binary data
+      const wavBuffer = await response.arrayBuffer();
+      
+      // Create an AudioContext for decoding
+      const audioContext = new AudioContext({ sampleRate: this.sampleRate });
+      
+      // Decode the audio
+      const audioBuffer = await audioContext.decodeAudioData(wavBuffer.slice(0));
+      
+      // Convert to mono PCM16
+      const pcmData = new Int16Array(audioBuffer.length);
+      const channelData = audioBuffer.getChannelData(0); // Get first channel
+      
+      // Convert Float32 samples to Int16
+      for (let i = 0; i < channelData.length; i++) {
+        // Convert float (-1 to 1) to int16 (-32768 to 32767)
+        pcmData[i] = Math.max(-32768, Math.min(32767, Math.floor(channelData[i] * 32767)));
+      }
+      
+      console.log('Instruction audio preprocessed:', {
+        originalLength: audioBuffer.length,
+        channels: audioBuffer.numberOfChannels,
+        sampleRate: audioBuffer.sampleRate,
+        duration: audioBuffer.duration,
+        pcmLength: pcmData.length,
+        firstSamples: Array.from(pcmData.slice(0, 5)),
+        lastSamples: Array.from(pcmData.slice(-5))
+      });
+      
+      // Store the preprocessed audio
+      this._instructionAudio = {
+        mono: pcmData,
+        raw: pcmData,
+        sampleRate: audioBuffer.sampleRate,
+        duration: audioBuffer.duration
+      };
+      
+    } catch (error) {
+      console.error('Error preloading instruction audio:', error);
+      throw error;
+    }
   }
 
   /**
@@ -305,6 +365,9 @@ export class WavRecorder {
       );
     }
 
+    // Preload instruction audio before starting
+    await this._preloadInstructionAudio();
+
     if (
       !navigator.mediaDevices ||
       !('getUserMedia' in navigator.mediaDevices)
@@ -408,21 +471,94 @@ export class WavRecorder {
   /**
    * Pauses the recording
    * Keeps microphone stream open but halts storage of audio
-   * @returns {Promise<true>}
+   * @param {boolean} [appendInstruct=true] Whether to append the instruction audio
+   * @returns {Promise<{mono: Int16Array, raw: Int16Array}>}
    */
-  async pause() {
+  async pause(appendInstruct = true) {
     if (!this.processor) {
       throw new Error('Session ended: please call .begin() first');
     } else if (!this.recording) {
       throw new Error('Already paused: please call .record() first');
     }
-    if (this._chunkProcessorBuffer.raw.byteLength) {
-      this._chunkProcessor(this._chunkProcessorBuffer);
-    }
+
     this.log('Pausing ...');
     await this._event('stop');
     this.recording = false;
-    return true;
+
+    // If instruction audio should be appended
+    if (appendInstruct && this._instructionAudio) {
+      try {
+        // Get the current audio data
+        console.log('Getting current audio data...');
+        const currentAudio = await this._event('export');
+        
+        if (!currentAudio?.audio?.data) {
+          console.error('No current audio data available');
+          // Use preprocessed instruction audio directly
+          const float32Data = Float32Array.from(this._instructionAudio.mono, x => x / 32767);
+          await this._event('update', {
+            audio: {
+              channels: [float32Data]
+            }
+          });
+          return this._instructionAudio;
+        }
+
+        // Ensure we have Int16Arrays
+        const currentData = currentAudio.audio.data instanceof Int16Array 
+          ? currentAudio.audio.data 
+          : new Int16Array(currentAudio.audio.data);
+
+        console.log('Buffer sizes:', {
+          currentDataLength: currentData.length,
+          instructionLength: this._instructionAudio.mono.length,
+          calculatedTotalLength: currentData.length + this._instructionAudio.mono.length
+        });
+        
+        // Create a new buffer that can hold both the current audio and the instruction
+        const totalLength = currentData.length + this._instructionAudio.mono.length;
+        const mergedData = new Int16Array(totalLength);
+        
+        // Copy the current audio data
+        mergedData.set(currentData, 0);
+        
+        // Append the instruction audio
+        mergedData.set(this._instructionAudio.mono, currentData.length);
+
+        // Convert to float32 for the audio processor
+        const float32Data = Float32Array.from(mergedData, x => x / 32767);
+        
+        // Send as a new chunk to be processed
+        await this._event('update', {
+          audio: {
+            channels: [float32Data]
+          }
+        });
+        
+        console.log('Sent merged audio chunk:', {
+          totalLength: float32Data.length,
+          firstSamples: Array.from(float32Data.slice(0, 5)),
+          lastSamples: Array.from(float32Data.slice(-5))
+        });
+
+        return {
+          mono: mergedData,
+          raw: mergedData
+        };
+      } catch (error) {
+        console.error('Error appending instruction audio:', error);
+        console.error('Error stack:', error.stack);
+        return {
+          mono: new Int16Array(0),
+          raw: new Int16Array(0)
+        };
+      }
+    }
+
+    return {
+      mono: new Int16Array(0),
+      raw: new Int16Array(0)
+    };
   }
 
   /**
@@ -498,10 +634,238 @@ export class WavRecorder {
   }
 
   /**
+   * Creates a custom audio chunk in PCM16 format
+   * @param {number[]} samples Array of samples between -1 and 1
+   * @returns {{mono: Int16Array, raw: Int16Array}}
+   */
+  createCustomChunk(samples) {
+    const mono = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      // Convert float (-1 to 1) to Int16 (-32768 to 32767)
+      mono[i] = Math.max(-32768, Math.min(32767, Math.floor(samples[i] * 32767)));
+    }
+    // For mono audio, raw is the same as mono
+    return { mono, raw: mono };
+  }
+
+  /**
+   * Validates WAV file header
+   * @private
+   * @param {ArrayBuffer} buffer
+   * @returns {boolean}
+   */
+  _validateWavHeader(buffer) {
+    const view = new DataView(buffer);
+    // Check RIFF header
+    const riff = String.fromCharCode(
+      view.getUint8(0),
+      view.getUint8(1),
+      view.getUint8(2),
+      view.getUint8(3)
+    );
+    if (riff !== 'RIFF') {
+      console.error('Invalid WAV header: missing RIFF marker');
+      return false;
+    }
+    
+    // Check WAVE format
+    const wave = String.fromCharCode(
+      view.getUint8(8),
+      view.getUint8(9),
+      view.getUint8(10),
+      view.getUint8(11)
+    );
+    if (wave !== 'WAVE') {
+      console.error('Invalid WAV header: missing WAVE format');
+      return false;
+    }
+    
+    return true;
+  }
+
+  /**
+   * Test function to validate WAV file by transcribing and playing it
+   * @private
+   * @returns {Promise<void>}
+   */
+  async _testInstructWav() {
+    try {
+      console.log('Testing instruction WAV file...');
+      
+      // Load the WAV file
+      const wavBuffer = await this._loadInstructWav();
+      console.log('WAV file loaded, size:', wavBuffer.byteLength);
+      
+      // Create an AudioContext for playback
+      const audioContext = new AudioContext();
+      
+      // Create an audio buffer from WAV data
+      const audioBuffer = await audioContext.decodeAudioData(wavBuffer);
+      console.log('Audio decoded:', {
+        duration: audioBuffer.duration,
+        numberOfChannels: audioBuffer.numberOfChannels,
+        sampleRate: audioBuffer.sampleRate,
+        length: audioBuffer.length
+      });
+      
+      // Create a blob URL for the audio
+      const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create an audio element and play it
+      const audio = new Audio(url);
+      console.log('Playing audio...');
+      
+      // Play the audio and wait for it to finish
+      await new Promise((resolve, reject) => {
+        audio.onended = resolve;
+        audio.onerror = reject;
+        audio.play();
+      });
+      
+      console.log('Audio playback complete');
+      URL.revokeObjectURL(url);
+      
+      // Convert to PCM for inspection
+      const pcmData = await this.createChunkFromWav(wavBuffer);
+      console.log('PCM data:', {
+        length: pcmData.mono.length,
+        firstSamples: Array.from(pcmData.mono.slice(0, 5)),
+        lastSamples: Array.from(pcmData.mono.slice(-5))
+      });
+      
+      return {
+        duration: audioBuffer.duration,
+        sampleRate: audioBuffer.sampleRate,
+        channels: audioBuffer.numberOfChannels,
+        pcmLength: pcmData.mono.length
+      };
+      
+    } catch (error) {
+      console.error('Error testing WAV file:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Loads the instruction WAV file
+   * @private
+   * @returns {Promise<ArrayBuffer>}
+   */
+  async _loadInstructWav() {
+    try {
+      // Use fetch with proper path and headers
+      const response = await fetch('/audio_instruct/test_instruct.wav', {
+        headers: {
+          'Accept': 'audio/wav, audio/*;q=0.9, */*;q=0.8'
+        }
+      });
+      
+      if (!response.ok) {
+        console.error('Failed to load WAV file:', {
+          status: response.status,
+          statusText: response.statusText,
+          contentType: response.headers.get('content-type'),
+          headers: Object.fromEntries(response.headers.entries())
+        });
+        throw new Error(`Failed to load WAV file: ${response.statusText}`);
+      }
+      
+      // Get the raw binary data
+      const arrayBuffer = await response.arrayBuffer();
+      
+      // Log the first few bytes to verify WAV header
+      const header = new Uint8Array(arrayBuffer.slice(0, 44));
+      const headerInfo = {
+        size: arrayBuffer.byteLength,
+        header: Array.from(header).map(b => b.toString(16).padStart(2, '0')).join(' '),
+        riff: String.fromCharCode(...header.slice(0, 4)),
+        fileSize: new DataView(arrayBuffer.slice(4, 8)).getUint32(0, true),
+        wave: String.fromCharCode(...header.slice(8, 12)),
+        // Parse more WAV header fields
+        format: String.fromCharCode(...header.slice(12, 16)),
+        subchunk1Size: new DataView(arrayBuffer.slice(16, 20)).getUint32(0, true),
+        audioFormat: new DataView(arrayBuffer.slice(20, 22)).getUint16(0, true),
+        numChannels: new DataView(arrayBuffer.slice(22, 24)).getUint16(0, true),
+        sampleRate: new DataView(arrayBuffer.slice(24, 28)).getUint32(0, true),
+        byteRate: new DataView(arrayBuffer.slice(28, 32)).getUint32(0, true),
+        blockAlign: new DataView(arrayBuffer.slice(32, 34)).getUint16(0, true),
+        bitsPerSample: new DataView(arrayBuffer.slice(34, 36)).getUint16(0, true),
+        dataChunk: String.fromCharCode(...header.slice(36, 40)),
+        dataSize: new DataView(arrayBuffer.slice(40, 44)).getUint32(0, true)
+      };
+      
+      console.log('WAV header:', headerInfo);
+      
+      // Additional validation
+      if (headerInfo.audioFormat !== 1) {
+        throw new Error(`Unsupported WAV format: ${headerInfo.audioFormat} (expected PCM = 1)`);
+      }
+      
+      if (headerInfo.bitsPerSample !== 16) {
+        throw new Error(`Unsupported bits per sample: ${headerInfo.bitsPerSample} (expected 16)`);
+      }
+      
+      const expectedFileSize = headerInfo.dataSize + 44; // data size + header size
+      if (headerInfo.size !== expectedFileSize) {
+        console.warn('WAV file size mismatch:', {
+          actualSize: headerInfo.size,
+          expectedSize: expectedFileSize,
+          difference: headerInfo.size - expectedFileSize
+        });
+      }
+      
+      // Validate WAV header
+      if (!this._validateWavHeader(arrayBuffer)) {
+        throw new Error('Invalid WAV file format');
+      }
+      
+      return arrayBuffer;
+    } catch (error) {
+      console.error('Error loading instruction WAV:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Creates a custom audio chunk from an ArrayBuffer containing WAV data
+   * @param {ArrayBuffer} wavArrayBuffer ArrayBuffer containing WAV file data
+   * @returns {Promise<{mono: Int16Array, raw: Int16Array}>}
+   */
+  async createChunkFromWav(wavArrayBuffer) {
+    try {
+      console.log('Creating chunk from WAV...');
+      
+      // Create an AudioContext
+      const audioContext = new AudioContext({ sampleRate: this.sampleRate });
+      
+      // Clone the buffer to prevent modifications
+      const bufferCopy = wavArrayBuffer.slice(0);
+      
+      // Skip WAV header (44 bytes) to get to PCM data
+      const dataStart = 44;
+      const pcmData = new Int16Array(bufferCopy.slice(dataStart));
+      
+      console.log('PCM data:', {
+        length: pcmData.length,
+        firstSamples: Array.from(pcmData.slice(0, 5)),
+        lastSamples: Array.from(pcmData.slice(-5))
+      });
+      
+      // Return the PCM data directly
+      return { mono: pcmData, raw: pcmData };
+    } catch (error) {
+      console.error('Error creating chunk from WAV:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Ends the current recording session and saves the result
+   * @param {boolean} [appendInstruct=true] Whether to append the instruction audio
    * @returns {Promise<import('./wav_packer.js').WavPackerAudioType>}
    */
-  async end() {
+  async end(appendInstruct = true) {
     if (!this.processor) {
       throw new Error('Session ended: please call .begin() first');
     }
@@ -516,6 +880,75 @@ export class WavRecorder {
 
     this.log('Exporting ...');
     const exportData = await this._event('export', {}, _processor);
+    
+    // Ensure we have valid audio data
+    if (!exportData?.audio?.data || !exportData.audio.channels) {
+      throw new Error('No valid audio data received from recorder');
+    }
+    
+    console.log('Original audio data:', {
+      channels: exportData.audio.channels.length,
+      dataLength: exportData.audio.data.length,
+      firstSamples: Array.from(exportData.audio.data.slice(0, 5)),
+      lastSamples: Array.from(exportData.audio.data.slice(-5))
+    });
+
+    // Add instruction WAV if enabled
+    if (appendInstruct) {
+      try {
+        console.log('Loading instruction WAV...');
+        const instructWavBuffer = await this._loadInstructWav();
+        
+        console.log('Creating chunk from instruction WAV...');
+        const extraChunk = await this.createChunkFromWav(instructWavBuffer);
+        
+        // Merge the extra chunk with the existing audio
+        console.log('Merging chunks...');
+        
+        // Create a new Int16Array with space for both chunks
+        const totalLength = exportData.audio.data.length + extraChunk.raw.length;
+        const mergedData = new Int16Array(totalLength);
+        
+        // Copy the original data
+        mergedData.set(new Int16Array(exportData.audio.data));
+        
+        // Append the extra chunk
+        mergedData.set(extraChunk.raw, exportData.audio.data.length);
+        
+        console.log('Merged data:', {
+          originalLength: exportData.audio.data.length,
+          extraLength: extraChunk.raw.length,
+          mergedLength: mergedData.length,
+          firstSamples: Array.from(mergedData.slice(0, 5)),
+          lastSamples: Array.from(mergedData.slice(-5))
+        });
+
+        // Update the channels data
+        const mergedChannels = exportData.audio.channels.map(channel => {
+          const newChannel = new Float32Array(channel.length + extraChunk.mono.length);
+          newChannel.set(new Float32Array(channel));
+          newChannel.set(new Float32Array(extraChunk.mono.map(x => x / 32767)), channel.length);
+          return newChannel;
+        });
+
+        exportData.audio = {
+          ...exportData.audio,
+          data: mergedData,
+          channels: mergedChannels,
+          bitsPerSample: 16
+        };
+
+        console.log('Final audio data:', {
+          channels: exportData.audio.channels.length,
+          dataLength: exportData.audio.data.length,
+          firstSamples: Array.from(exportData.audio.data.slice(0, 5)),
+          lastSamples: Array.from(exportData.audio.data.slice(-5))
+        });
+      } catch (error) {
+        console.error('Error appending instruction audio:', error);
+        // Continue with original audio if appending fails
+      }
+    }
 
     this.processor.disconnect();
     this.source.disconnect();
