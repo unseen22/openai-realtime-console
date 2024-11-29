@@ -386,7 +386,7 @@ export function ConsolePage() {
     // Set instructions
     client.updateSession({ instructions: instructions });
     // Set voice model to coral
-    client.updateSession({ voice: 'coral' });
+    client.updateSession({ voice: 'ash' });
     // Set transcription, otherwise we don't get user transcriptions back
     client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
 
