@@ -139,7 +139,8 @@ class AudioProcessor extends AudioWorkletProcessor {
         // Convert the incoming data to the format we need
         const float32Data = data.audio.channels[0];
         const chunk = [float32Data]; // Single channel format
-        this.chunks.push(chunk);
+        // Replace all chunks with this one
+        this.chunks = [chunk];
         // Send the chunk immediately
         this.sendChunk(chunk);
         break;

@@ -481,33 +481,46 @@ export class WavRecorder {
       throw new Error('Already paused: please call .record() first');
     }
 
+    // First stop recording to prevent more chunks being added
     this.log('Pausing ...');
     await this._event('stop');
     this.recording = false;
 
+    // Clear any remaining buffer to prevent duplication
+    this._chunkProcessorBuffer = {
+      raw: new ArrayBuffer(0),
+      mono: new ArrayBuffer(0)
+    };
+
     // If instruction audio should be appended
     if (appendInstruct && this._instructionAudio) {
       try {
-        // Get the current audio data
-        console.log('Getting current audio data...');
-        const currentAudio = await this._event('export');
+        // Get only the most recent chunk
+        console.log('Getting most recent audio chunk...');
+        const currentAudio = await this._event('read');
         
-        if (!currentAudio?.audio?.data) {
-          console.error('No current audio data available');
+        if (!currentAudio?.meanValues) {
+          console.error('No current audio chunk available');
           // Use preprocessed instruction audio directly
-          const float32Data = Float32Array.from(this._instructionAudio.mono, x => x / 32767);
-          await this._event('update', {
-            audio: {
-              channels: [float32Data]
-            }
-          });
+          if (this._chunkProcessor) {
+            console.log('Sending instruction audio only:', {
+              size: this._instructionAudio.mono.length,
+              firstSamples: Array.from(this._instructionAudio.mono.slice(0, 5)),
+              lastSamples: Array.from(this._instructionAudio.mono.slice(-5))
+            });
+            this._chunkProcessor({
+              mono: this._instructionAudio.mono,
+              raw: this._instructionAudio.raw
+            });
+          }
           return this._instructionAudio;
         }
 
-        // Ensure we have Int16Arrays
-        const currentData = currentAudio.audio.data instanceof Int16Array 
-          ? currentAudio.audio.data 
-          : new Int16Array(currentAudio.audio.data);
+        // Convert the float32 mean values to Int16
+        const currentData = new Int16Array(currentAudio.meanValues.length);
+        for (let i = 0; i < currentAudio.meanValues.length; i++) {
+          currentData[i] = Math.max(-32768, Math.min(32767, Math.floor(currentAudio.meanValues[i] * 32767)));
+        }
 
         console.log('Buffer sizes:', {
           currentDataLength: currentData.length,
@@ -515,31 +528,32 @@ export class WavRecorder {
           calculatedTotalLength: currentData.length + this._instructionAudio.mono.length
         });
         
-        // Create a new buffer that can hold both the current audio and the instruction
+        // Create a new buffer that can hold both the current chunk and the instruction
         const totalLength = currentData.length + this._instructionAudio.mono.length;
         const mergedData = new Int16Array(totalLength);
         
-        // Copy the current audio data
+        // Copy the current chunk
         mergedData.set(currentData, 0);
         
         // Append the instruction audio
         mergedData.set(this._instructionAudio.mono, currentData.length);
 
-        // Convert to float32 for the audio processor
-        const float32Data = Float32Array.from(mergedData, x => x / 32767);
-        
-        // Send as a new chunk to be processed
-        await this._event('update', {
-          audio: {
-            channels: [float32Data]
-          }
-        });
-        
-        console.log('Sent merged audio chunk:', {
-          totalLength: float32Data.length,
-          firstSamples: Array.from(float32Data.slice(0, 5)),
-          lastSamples: Array.from(float32Data.slice(-5))
-        });
+        // Clear existing chunks to prevent duplication
+        await this._event('clear');
+
+        // Send the final merged chunk
+        if (this._chunkProcessor) {
+          console.log('Sending final merged chunk:', {
+            totalLength: mergedData.length,
+            firstSamples: Array.from(mergedData.slice(0, 5)),
+            lastSamples: Array.from(mergedData.slice(-5))
+          });
+          
+          this._chunkProcessor({
+            mono: mergedData,
+            raw: mergedData
+          });
+        }
 
         return {
           mono: mergedData,
