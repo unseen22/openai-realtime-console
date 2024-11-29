@@ -255,6 +255,12 @@ export function ConsolePage() {
     const client = clientRef.current;
     const wavRecorder = wavRecorderRef.current;
     await wavRecorder.pause();
+    client.sendUserMessageContent([
+      {
+        type: 'input_text',
+        text: 'Answer in a gangster black african-american accent.'
+      }
+    ]);
     client.createResponse();
   };
 
@@ -386,7 +392,7 @@ export function ConsolePage() {
     // Set instructions
     client.updateSession({ instructions: instructions });
     // Set voice model to coral
-    client.updateSession({ voice: 'coral' });
+    client.updateSession({ voice: 'ash' });
     // Set transcription, otherwise we don't get user transcriptions back
     client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
 
@@ -489,14 +495,6 @@ export function ConsolePage() {
       const items = client.conversation.getItems();
       if (delta?.audio) {
         wavStreamPlayer.add16BitPCM(delta.audio, item.id);
-      }
-      if (item.status === 'completed' && item.formatted.audio?.length) {
-        const wavFile = await WavRecorder.decode(
-          item.formatted.audio,
-          24000,
-          24000
-        );
-        item.formatted.file = wavFile;
       }
       setItems(items);
     });
