@@ -73,16 +73,7 @@ async def call_function(function_call: FunctionCall):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/fake-memories")
-async def get_memories_endpoint(
-    limit: int = Query(None, description="Limit the number of memories returned"),
-    min_importance: int = Query(None, ge=1, le=10, description="Filter by minimum importance (1-10)")
-):
-    """Get fake memories with optional filtering"""
-    print(f"Received request for memories with limit={limit}, min_importance={min_importance}")
-    try:
-        memories = get_fake_memories(limit=limit, min_importance=min_importance)
-        print(f"Returning {len(memories)} memories")
-        return {"memories": memories}
-    except Exception as e:
-        print(f"Error in get_memories_endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_memories_endpoint():
+    """Get fake memories"""
+    memories = get_fake_memories()
+    return {"memories": memories}

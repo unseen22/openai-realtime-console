@@ -25,7 +25,7 @@ import { ConversationView } from '../components/ConversationView';
 import { WeatherMap } from '../components/WeatherMap';
 import { MemoryView } from '../components/MemoryView';
 import { Coordinates, RealtimeEvent, MemoryKV } from '../types/console';
-import { setupConversation } from '../services/conversationService';
+import { setupConversation, updateSessionWithMemories } from '../services/conversationService';
 
 import './ConsolePage.scss';
 
@@ -100,6 +100,10 @@ export function ConsolePage() {
 
     await audioHandler.initialize();
     await client.connect();
+    
+    // Set up initial conversation and then update with memories
+    await setupConversation(client);
+    await updateSessionWithMemories(client);
 
     client.sendUserMessageContent([
       {
