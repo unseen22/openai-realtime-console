@@ -25,9 +25,19 @@ import { ConversationView } from '../components/ConversationView';
 import { WeatherMap } from '../components/WeatherMap';
 import { MemoryView } from '../components/MemoryView';
 import { Coordinates, RealtimeEvent, MemoryKV } from '../types/console';
-import { setupConversation, updateSessionWithMemories } from '../services/conversationService';
+import { setupConversation, updateSessionWithMemories, storeConversationMemory } from '../services/conversationService';
 
 import './ConsolePage.scss';
+
+// Add interface for pending memory
+interface PendingMemory {
+  userMessage?: string;
+  assistantResponse?: string;
+}
+
+interface PendingMemories {
+  [key: string]: PendingMemory;
+}
 
 export function ConsolePage() {
   // State
@@ -38,6 +48,7 @@ export function ConsolePage() {
   const [canPushToTalk, setCanPushToTalk] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
   const [memoryKv, setMemoryKv] = useState<MemoryKV>({});
+  const [pendingMemories, setPendingMemories] = useState<PendingMemories>({});
   const [coords, setCoords] = useState<Coordinates | null>({
     lat: 37.775593,
     lng: -122.418137,
@@ -49,6 +60,9 @@ export function ConsolePage() {
   const serverCanvasRef = useRef<HTMLCanvasElement>(null);
   const startTimeRef = useRef<string>(new Date().toISOString());
   const audioHandlerRef = useRef<AudioHandler>(new AudioHandler());
+
+  // Add ref for tracking processed items
+  const processedItemsRef = useRef<Set<string>>(new Set());
 
   // Get API Key
   const apiKey = LOCAL_RELAY_SERVER_URL
@@ -218,8 +232,12 @@ export function ConsolePage() {
     // Set up conversation configuration
     setupConversation(client);
 
+    // Debug: Track when effect is mounted/unmounted
+    console.log('🔄 [Effect] Setting up event handlers');
+
     // Set up event handlers
     client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
+      console.log('📢 [Event] Realtime event:', realtimeEvent.event.type);
       setRealtimeEvents((prev) => {
         const lastEvent = prev[prev.length - 1];
         if (lastEvent?.event.type === realtimeEvent.event.type) {
@@ -228,19 +246,77 @@ export function ConsolePage() {
         }
         return prev.concat(realtimeEvent);
       });
-    });
 
-    client.on('error', (event: any) => console.error(event));
-    client.on('conversation.interrupted', async () => {
-      const audioHandler = audioHandlerRef.current;
-      const trackSampleOffset = await audioHandler.interruptPlayback();
-      if (trackSampleOffset?.trackId) {
-        const { trackId, offset } = trackSampleOffset;
-        await client.cancelResponse(trackId, offset);
+      // Handle transcription in the realtime event handler
+      if (realtimeEvent.event.type === 'conversation.item.input_audio_transcription.completed') {
+        const event = realtimeEvent.event;
+        const memoryKey = `transcript_${event.item_id}`;
+        
+        // Check if we've already processed this item
+        if (processedItemsRef.current.has(memoryKey)) {
+          console.log('⚠️ [Transcription] Already processed this transcript:', event.item_id);
+          return;
+        }
+
+        console.log('🎤 [Transcription] Event received in realtime handler:', {
+          type: event.type,
+          item_id: event.item_id,
+          transcript: event.transcript
+        });
+
+        setPendingMemories(prev => {
+          console.log('📝 [Transcription] State before update:', {
+            pendingMemories: prev,
+            itemId: event.item_id,
+            hasAssistantResponse: !!prev[event.item_id]?.assistantResponse
+          });
+
+          const newMemories = { ...prev };
+          newMemories[event.item_id] = {
+            ...newMemories[event.item_id],
+            userMessage: event.transcript
+          };
+
+          // Debug: Check if we have assistant response
+          const assistantResponse = newMemories[event.item_id]?.assistantResponse;
+          console.log('🔍 [Transcription] Memory state after update:', {
+            itemId: event.item_id,
+            hasTranscript: true,
+            hasAssistantResponse: !!assistantResponse,
+            fullState: newMemories
+          });
+
+          if (assistantResponse) {
+            console.log('💾 [Transcription] Storing complete memory:', {
+              itemId: event.item_id,
+              transcript: event.transcript,
+              assistantResponse
+            });
+            storeConversationMemory(event.transcript, assistantResponse);
+            processedItemsRef.current.add(memoryKey);
+            const { [event.item_id]: _, ...rest } = newMemories;
+            return rest;
+          }
+
+          console.log('⏳ [Transcription] Waiting for assistant response:', {
+            itemId: event.item_id,
+            transcript: event.transcript
+          });
+          return newMemories;
+        });
       }
     });
 
     client.on('conversation.updated', async ({ item, delta }: any) => {
+      const eventTime = new Date().toISOString();
+      console.log(`🔄 [Update ${eventTime}] Conversation updated:`, {
+        itemRole: item.role,
+        itemStatus: item.status,
+        itemId: item.id,
+        hasAudio: !!delta?.audio,
+        isCompleted: item.status === 'completed'
+      });
+
       const items = client.conversation.getItems();
       const audioHandler = audioHandlerRef.current;
 
@@ -248,17 +324,108 @@ export function ConsolePage() {
         audioHandler.playAudio(delta.audio, item.id);
       }
 
-      if (item.status === 'completed' && item.formatted.audio?.length) {
-        const wavFile = await AudioHandler.decodeAudio(item.formatted.audio);
-        item.formatted.file = wavFile;
+      if (item.status === 'completed') {
+        if (item.formatted.audio?.length) {
+          const wavFile = await AudioHandler.decodeAudio(item.formatted.audio);
+          item.formatted.file = wavFile;
+        }
+        
+        // Handle completed assistant response
+        if (item.role === 'assistant' && items.length >= 2) {
+          const previousItem = items[items.length - 2];
+          const memoryKey = `transcript_${previousItem.id}`;
+
+          console.log(`👥 [Update ${eventTime}] Processing assistant response:`, {
+            assistantId: item.id,
+            previousItemId: previousItem.id,
+            previousItemRole: previousItem.role
+          });
+
+          const assistantResponse = item.content?.find((c: any) => c.type === 'audio')?.transcript || '';
+          
+          if (!assistantResponse) {
+            console.log(`❌ [Update ${eventTime}] No assistant transcript found for:`, item.id);
+            return;
+          }
+
+          // For text input, store immediately
+          if (previousItem.content?.find((c: any) => c.type === 'input_text')) {
+            const userMessage = previousItem.content.find((c: any) => c.type === 'input_text')?.text || '';
+            if (userMessage) {
+              // Check if we've already processed this item
+              if (processedItemsRef.current.has(memoryKey)) {
+                console.log('⚠️ [Update] Already processed this memory:', previousItem.id);
+                return;
+              }
+
+              console.log(`💾 [Update ${eventTime}] Storing text input memory:`, {
+                previousItemId: previousItem.id,
+                userMessage,
+                assistantResponse
+              });
+              await storeConversationMemory(userMessage, assistantResponse);
+              processedItemsRef.current.add(memoryKey);
+            }
+            return;
+          }
+
+          // For audio input, store in pending memories
+          setPendingMemories(prev => {
+            console.log(`📝 [Update ${eventTime}] State before assistant update:`, {
+              pendingMemories: prev,
+              previousItemId: previousItem.id,
+              hasUserMessage: !!prev[previousItem.id]?.userMessage
+            });
+
+            const newMemories = { ...prev };
+            newMemories[previousItem.id] = {
+              ...newMemories[previousItem.id],
+              assistantResponse
+            };
+
+            // Debug: Check if we have user message
+            const userMessage = newMemories[previousItem.id]?.userMessage;
+            console.log(`🔍 [Update ${eventTime}] Memory state after assistant update:`, {
+              previousItemId: previousItem.id,
+              hasUserMessage: !!userMessage,
+              hasAssistantResponse: true,
+              fullState: newMemories
+            });
+            
+            if (userMessage) {
+              // Check if we've already processed this item
+              if (processedItemsRef.current.has(memoryKey)) {
+                console.log('⚠️ [Update] Already processed this memory:', previousItem.id);
+                return prev;
+              }
+
+              console.log(`💾 [Update ${eventTime}] Storing complete memory:`, {
+                previousItemId: previousItem.id,
+                userMessage,
+                assistantResponse
+              });
+              storeConversationMemory(userMessage, assistantResponse);
+              processedItemsRef.current.add(memoryKey);
+              const { [previousItem.id]: _, ...rest } = newMemories;
+              return rest;
+            }
+            
+            console.log(`⏳ [Update ${eventTime}] Waiting for user transcript:`, {
+              previousItemId: previousItem.id,
+              assistantResponse
+            });
+            return newMemories;
+          });
+        }
       }
 
       setItems(items);
     });
 
-    setItems(client.conversation.getItems());
-
+    // Debug: Track cleanup
     return () => {
+      console.log('🧹 [Effect] Cleaning up event handlers');
+      processedItemsRef.current.clear();
       client.reset();
     };
   }, []);

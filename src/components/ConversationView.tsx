@@ -1,6 +1,7 @@
 import React from 'react';
 import { X } from 'react-feather';
 import { ItemType } from '@openai/realtime-api-beta/dist/lib/client.js';
+import { saveConversationToMemory } from '../services/memoryService';
 
 interface ConversationViewProps {
   items: ItemType[];
@@ -11,6 +12,19 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   items,
   onDeleteItem,
 }) => {
+  const handleNewMessage = async (speaker: 'user' | 'assistant', content: string) => {
+    // Your existing message handling code...
+
+    // Save to memory if it's an assistant message
+    if (speaker === 'assistant') {
+      await saveConversationToMemory({
+        speaker,
+        content,
+        timestamp: new Date().toISOString()
+      });
+    }
+  };
+
   return (
     <div className="content-block conversation">
       <div className="content-block-title">conversation</div>

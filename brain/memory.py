@@ -1,13 +1,17 @@
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
+from .embedder import Embedder
 
 class MemoryType(Enum):
     CONVERSATION = "conversation"
-    SUMMARY = "summary"
-    OPENER = "opener"
+    EXPERIENCE = "experience"
+    PROFILE = "profile"
+    SYSTEM = "system"
 
 class Memory:
+    _embedder = Embedder()
+    
     def __init__(
         self,
         content: str,
@@ -46,3 +50,19 @@ class Memory:
     def __str__(self) -> str:
         """String representation of the memory"""
         return f"Memory({self.memory_type.value}: {self.content[:50]}... | Importance: {self.importance:.2f})"
+
+    @classmethod
+    def create(cls, content: str, importance: float = 0.0, 
+               memory_type: MemoryType = MemoryType.CONVERSATION,
+               timestamp: Optional[datetime] = None) -> 'Memory':
+        """
+        Create a new memory with automatically generated embedding vector
+        """
+        vector = cls._embedder.embed_memory(content)
+        return cls(
+            content=content,
+            vector=vector,
+            importance=importance,
+            memory_type=memory_type,
+            timestamp=timestamp
+        )

@@ -1,6 +1,6 @@
 import sqlite3
 from typing import List, Dict, Optional
-from brain.memory import Memory, MemoryType
+from .memory import Memory, MemoryType
 import json
 
 class Database:
@@ -171,7 +171,19 @@ class Database:
                     WHERE brain_id = ?
                 """, (*params, brain_id))
 
+    def delete_memory(self, persona_id: str, timestamp: str):
+        """Delete a specific memory by its timestamp"""
+        self._connect()
+        brain_id = self.get_or_create_brain_id(persona_id)
+        
+        with self.conn:
+            self.conn.execute("""
+                DELETE FROM memories 
+                WHERE brain_id = ? AND timestamp = ?
+            """, (brain_id, timestamp))
+
     def clear_memories(self, persona_id: str):
+        """Clear all memories for this persona"""
         self._connect()
         brain_id = self.get_or_create_brain_id(persona_id)
         

@@ -2,6 +2,7 @@ from typing import Dict, Any, Optional, List
 import json
 import os
 from datetime import datetime
+
 from brain.memory import Memory, MemoryType
 from brain.database import Database
 
@@ -18,7 +19,7 @@ class Brain:
         """Load memories for the current persona from database"""
         memories = self.db.get_memories(self.persona_id)
         self.memories = {
-            memory.timestamp.strftime('%Y-%m-%d-%H-%M-%S-%f'): memory 
+            memory.timestamp.isoformat(): memory 
             for memory in memories
         }
 
@@ -55,7 +56,7 @@ class Brain:
         )
         
         # Store the memory using its timestamp as a key
-        memory_key = memory.timestamp.strftime('%Y-%m-%d-%H-%M-%S-%f')
+        memory_key = memory.timestamp.isoformat()
         self.memories[memory_key] = memory
         
         # Store in database

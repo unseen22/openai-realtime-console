@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brain API Tester</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .endpoint {
+            border: 1px solid #ccc;
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .response {
+            background-color: #f5f5f5;
+            padding: 10px;
+            margin-top: 10px;
+            border-radius: 3px;
+            white-space: pre-wrap;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        input {
+            padding: 5px;
+            margin: 5px;
+        }
+        select {
+            padding: 5px;
+            margin: 5px;
+            border-radius: 4px;
+            min-width: 200px;
+        }
+        
+        input[type="number"] {
+            width: 100px;
+        }
+        
+        #store-memory-content {
+            width: 300px;
+        }
+        
+        .persona-selector {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .persona-selector button {
+            padding: 5px 10px;
+            font-size: 16px;
+        }
+        
+        .memories-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .memories-list {
+            margin-top: 10px;
+        }
+        
+        .memory-item {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: white;
+        }
+        
+        .memory-content {
+            flex-grow: 1;
+            margin-right: 10px;
+            word-break: break-word;
+        }
+        
+        .delete-btn {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .delete-btn:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <h1>Brain API Tester</h1>
+
+    <div class="endpoint">
+        <h3>GET /</h3>
+        <button onclick="callEndpoint('/')">Test Root</button>
+        <div id="root-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>GET /memories</h3>
+        <div class="persona-selector">
+            <select id="get-memories-persona-id">
+                <option value="">Select a Persona</option>
+            </select>
+            <button onclick="loadAvailablePersonas()" title="Refresh personas list">🔄</button>
+        </div>
+        <div class="memories-controls">
+            <button onclick="getMemories()">Get Memories</button>
+            <button onclick="deleteAllMemories()" class="delete-btn">Delete All Memories</button>
+        </div>
+        <div id="memories-list" class="memories-list"></div>
+        <div id="memories-response" class="response"></div>
+    </div>
+
+
+    <div class="endpoint"></div>
+        <h3>POST /memory/{persona_id}</h3>
+        <div class="persona-selector">
+            <select id="store-memory-persona-id">
+                <option value="">Select a Persona</option>
+            </select>
+            <button onclick="loadAvailablePersonas()" title="Refresh personas list">🔄</button>
+        </div>
+        <input type="text" id="store-memory-content" placeholder="Memory Content">
+        <input type="number" id="store-memory-importance" placeholder="Importance (0-1)" step="0.1" min="0" max="1">
+        <select id="store-memory-type">
+            <option value="conversation">Conversation</option>
+            <option value="experience">Experience</option>
+            <option value="profile">Profile</option>
+            <option value="system">System</option>
+        </select>
+        <button onclick="storePersonaMemory()">Store Memory</button>
+        <div id="store-memory-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>GET /fake-memories</h3>
+        <input type="text" id="fake-memories-persona-id" placeholder="Persona ID (default)">
+        <button onclick="getFakeMemories()">Get Fake Memories</button>
+        <div id="fake-memories-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>POST /memory</h3>
+        <input type="text" id="memory-key" placeholder="Memory Key">
+        <input type="text" id="memory-value" placeholder="Memory Value">
+        <button onclick="setMemory()">Set Memory</button>
+        <div id="memory-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>GET /memory/{key}</h3>
+        <input type="text" id="get-memory-key" placeholder="Memory Key">
+        <button onclick="getMemory()">Get Memory</button>
+        <div id="get-memory-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>POST /conversation</h3>
+        <input type="text" id="conversation-speaker" placeholder="Speaker (assistant/user)">
+        <input type="text" id="conversation-content" placeholder="Content">
+        <button onclick="saveConversation()">Save Conversation</button>
+        <div id="conversation-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>GET /persona/{persona_id}</h3>
+        <input type="text" id="get-persona-id" placeholder="Persona ID">
+        <button onclick="getPersonaBrain()">Get Persona Brain</button>
+        <div id="persona-response" class="response"></div>
+    </div>
+
+    <div class="endpoint">
+        <h3>POST /init-all-personas</h3>
+        <button onclick="initAllPersonas()">Initialize All Personas</button>
+        <div id="init-personas-response" class="response"></div>
+    </div>
+
+    
+
+    <script>
+        const API_URL = 'http://localhost:8081';
+
+        async function callEndpoint(endpoint, method = 'GET', body = null) {
+            try {
+                const options = {
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                };
+                if (body) {
+                    options.body = JSON.stringify(body);
+                }
+                const response = await fetch(`${API_URL}${endpoint}`, options);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'API request failed');
+                }
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('API Error:', error);
+                return { 
+                    error: error.message || 'Failed to fetch',
+                    timestamp: new Date().toISOString()
+                };
+            }
+        }
+
+        async function displayResponse(elementId, data) {
+            const element = document.getElementById(elementId);
+            element.textContent = JSON.stringify(data, null, 2);
+        }
+
+        // Endpoint handlers
+        async function getMemories() {
+            const personaId = document.getElementById('get-memories-persona-id').value;
+            if (!personaId) {
+                displayResponse('memories-response', {
+                    error: 'Please select a Persona'
+                });
+                return;
+            }
+
+            const data = await callEndpoint(`/memories?persona_id=${personaId}`);
+            displayResponse('memories-response', data);
+            
+            // Update memories list UI
+            const memoriesList = document.getElementById('memories-list');
+            memoriesList.innerHTML = '';
+            
+            if (Array.isArray(data)) {
+                data.forEach(memory => {
+                    const memoryDiv = document.createElement('div');
+                    memoryDiv.className = 'memory-item';
+                    
+                    const contentDiv = document.createElement('div');
+                    contentDiv.className = 'memory-content';
+                    contentDiv.textContent = memory.content;
+                    
+                    const deleteButton = document.createElement('button');
+                    deleteButton.className = 'delete-btn';
+                    deleteButton.textContent = '🗑️';
+                    deleteButton.onclick = () => deleteMemory(personaId, memory.timestamp);
+                    
+                    memoryDiv.appendChild(contentDiv);
+                    memoryDiv.appendChild(deleteButton);
+                    memoriesList.appendChild(memoryDiv);
+                });
+            }
+        }
+
+        async function getFakeMemories() {
+            const personaId = document.getElementById('fake-memories-persona-id').value || 'default';
+            const data = await callEndpoint(`/fake-memories?persona_id=${personaId}`);
+            displayResponse('fake-memories-response', data);
+        }
+
+        async function setMemory() {
+            const key = document.getElementById('memory-key').value;
+            const value = document.getElementById('memory-value').value;
+            const data = await callEndpoint('/memory', 'POST', { key, value });
+            displayResponse('memory-response', data);
+        }
+
+        async function getMemory() {
+            const key = document.getElementById('get-memory-key').value;
+            const data = await callEndpoint(`/memory/${key}`);
+            displayResponse('get-memory-response', data);
+        }
+
+        async function saveConversation() {
+            const speaker = document.getElementById('conversation-speaker').value;
+            const content = document.getElementById('conversation-content').value;
+            const data = await callEndpoint('/conversation', 'POST', { 
+                speaker, 
+                content,
+                timestamp: new Date().toISOString()
+            });
+            displayResponse('conversation-response', data);
+        }
+
+        async function getPersonaBrain() {
+            const personaId = document.getElementById('get-persona-id').value;
+            const data = await callEndpoint(`/persona/${personaId}`);
+            displayResponse('persona-response', data);
+        }
+
+        async function initAllPersonas() {
+            try {
+                const data = await callEndpoint('/init-all-personas', 'POST');
+                displayResponse('init-personas-response', data);
+            } catch (error) {
+                displayResponse('init-personas-response', {
+                    error: 'Failed to initialize personas',
+                    details: error.message
+                });
+            }
+        }
+
+        async function loadAvailablePersonas() {
+            try {
+                // Initialize personas and get the list
+                const initResponse = await callEndpoint('/init-all-personas', 'POST');
+                console.log("Init response:", initResponse);
+                
+                if (!initResponse.initialized_personas) {
+                    throw new Error('No personas returned from initialization');
+                }
+                
+                // Get both select elements
+                const storePersonaSelect = document.getElementById('store-memory-persona-id');
+                const getPersonaSelect = document.getElementById('get-memories-persona-id');
+                
+                // Clear existing options except the first one for both selects
+                while (storePersonaSelect.options.length > 1) {
+                    storePersonaSelect.remove(1);
+                }
+                while (getPersonaSelect.options.length > 1) {
+                    getPersonaSelect.remove(1);
+                }
+                
+                // Get details for each persona and add to both selects
+                for (const personaId of initResponse.initialized_personas) {
+                    try {
+                        // Get persona details
+                        const personaResponse = await callEndpoint(`/persona/${personaId}`);
+                        console.log(`Persona ${personaId} details:`, personaResponse);
+                        
+                        // Create option elements
+                        const storeOption = document.createElement('option');
+                        const getOption = document.createElement('option');
+                        
+                        storeOption.value = personaId;
+                        storeOption.text = `${personaId}`;
+                        getOption.value = personaId;
+                        getOption.text = `${personaId}`;
+                        
+                        // Add options to both selects
+                        storePersonaSelect.appendChild(storeOption);
+                        getPersonaSelect.appendChild(getOption);
+                    } catch (error) {
+                        console.error(`Error fetching details for persona ${personaId}:`, error);
+                    }
+                }
+                
+                console.log("Finished loading personas");
+            } catch (error) {
+                console.error('Error loading personas:', error);
+                // Show error in both response areas
+                displayResponse('store-memory-response', {
+                    error: 'Failed to load personas',
+                    details: error.message
+                });
+                displayResponse('memories-response', {
+                    error: 'Failed to load personas',
+                    details: error.message
+                });
+            }
+        }
+
+        async function storePersonaMemory() {
+            const personaSelect = document.getElementById('store-memory-persona-id');
+            const personaId = personaSelect.value;
+            const content = document.getElementById('store-memory-content').value;
+            const importance = parseFloat(document.getElementById('store-memory-importance').value) || 0.0;
+            const memoryType = document.getElementById('store-memory-type').value;
+
+            if (!personaId) {
+                displayResponse('store-memory-response', {
+                    error: 'Please select a Persona'
+                });
+                return;
+            }
+
+            if (!content) {
+                displayResponse('store-memory-response', {
+                    error: 'Memory content is required'
+                });
+                return;
+            }
+
+            const data = await callEndpoint(
+                `/memory/${personaId}`,
+                'POST',
+                {
+                    content: content,
+                    importance: importance,
+                    memory_type: memoryType
+                }
+            );
+            displayResponse('store-memory-response', data);
+        }
+
+        async function deleteAllMemories() {
+            const personaId = document.getElementById('get-memories-persona-id').value;
+            if (!personaId) {
+                displayResponse('memories-response', {
+                    error: 'Please select a Persona'
+                });
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to delete all memories for persona '${personaId}'?`)) {
+                return;
+            }
+            
+            const data = await callEndpoint(`/memories/${personaId}`, 'DELETE');
+            displayResponse('memories-response', data);
+            getMemories(); // Refresh the list
+        }
+
+        async function deleteMemory(personaId, memoryId) {
+            if (!confirm('Are you sure you want to delete this memory?')) {
+                return;
+            }
+            
+            // Properly encode the timestamp for the URL
+            const encodedMemoryId = encodeURIComponent(memoryId);
+            const data = await callEndpoint(`/memory/${personaId}/${encodedMemoryId}`, 'DELETE');
+            displayResponse('memories-response', data);
+            getMemories(); // Refresh the list
+        }
+
+        document.addEventListener('DOMContentLoaded', loadAvailablePersonas);
+    </script>
+</body>
+</html> 
