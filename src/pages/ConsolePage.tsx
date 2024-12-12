@@ -33,13 +33,13 @@ import './ConsolePage.scss';
 interface PendingMemory {
   userMessage?: string;
   assistantResponse?: string;
+  transcriptionId?: string;
+  voiceInstructId?: string;
 }
 
 interface PendingMemories {
   [key: string]: PendingMemory;
 }
-
-const VOICE_INSTRUCT = 'Answer in a very angry tone. Always finish sentence with "takichi"';
 
 export function ConsolePage() {
   // State
@@ -103,7 +103,7 @@ export function ConsolePage() {
       window.location.reload();
     }
   }, []);
-
+  const VOICE_INSTRUCT = "Speak in an angry tone. Always finish sentence with 'takichi'"
   // Connection handlers
   const connectConversation = useCallback(async () => {
     const client = clientRef.current;
@@ -121,22 +121,12 @@ export function ConsolePage() {
     await setupConversation(client);
     await updateSessionWithMemories(client);
 
-    // Set the voice instruction during connection
-   
     client.sendUserMessageContent([
       {
         type: 'input_text',
         text: 'How was your day?!',
       },
     ]);
-
-    client.sendUserMessageContent([
-      {
-        type: 'input_text',
-        text: VOICE_INSTRUCT,
-      },
-    ]);
-
 
     if (client.getTurnDetectionType() === 'server_vad') {
       await audioHandler.startRecording((data) => client.appendInputAudio(data));
@@ -189,7 +179,7 @@ export function ConsolePage() {
     
     console.log('🎤 [stopRecording] Preparing to send message content');
     try {
-      // Send only the audio content
+      // First send the audio content
       await client.sendUserMessageContent([
         {
           type: 'input_audio',
@@ -197,6 +187,15 @@ export function ConsolePage() {
         }
       ]);
       console.log('🎤 [stopRecording] Audio content sent');
+
+      // Then send the text content
+      await client.sendUserMessageContent([
+        {
+          type: 'input_text',
+          text: VOICE_INSTRUCT
+        }
+      ]);
+      console.log('🎤 [stopRecording] Text content sent');
       
       console.log('🎤 [stopRecording] Creating response');
       client.createResponse();
@@ -283,57 +282,50 @@ export function ConsolePage() {
         const event = realtimeEvent.event;
         const memoryKey = `transcript_${event.item_id}`;
         
-        // Check if we've already processed this item
-        if (processedItemsRef.current.has(memoryKey)) {
-          console.log('⚠️ [Transcription] Already processed this transcript:', event.item_id);
-          return;
-        }
-
         console.log('🎤 [Transcription] Event received in realtime handler:', {
           type: event.type,
           item_id: event.item_id,
-          transcript: event.transcript
+          transcript: event.transcript,
+          pendingMemories
         });
 
         setPendingMemories(prev => {
-          console.log('📝 [Transcription] State before update:', {
-            pendingMemories: prev,
-            itemId: event.item_id,
-            hasAssistantResponse: !!prev[event.item_id]?.assistantResponse
-          });
+          // Find any pending assistant responses waiting for a transcription
+          const pendingAssistantEntry = Object.entries(prev).find(([_, memory]) => 
+            memory.assistantResponse && !memory.userMessage
+          );
 
           const newMemories = { ...prev };
-          newMemories[event.item_id] = {
-            ...newMemories[event.item_id],
-            userMessage: event.transcript
-          };
-
-          // Debug: Check if we have assistant response
-          const assistantResponse = newMemories[event.item_id]?.assistantResponse;
-          console.log('🔍 [Transcription] Memory state after update:', {
-            itemId: event.item_id,
-            hasTranscript: true,
-            hasAssistantResponse: !!assistantResponse,
-            fullState: newMemories
-          });
-
-          if (assistantResponse) {
-            console.log('💾 [Transcription] Storing complete memory:', {
-              itemId: event.item_id,
-              transcript: event.transcript,
-              assistantResponse
+          
+          if (pendingAssistantEntry) {
+            // We found a waiting assistant response, associate this transcription with it
+            const [assistantKey, memory] = pendingAssistantEntry;
+            console.log('🔗 [Transcription] Found pending assistant response, linking:', {
+              transcriptionId: event.item_id,
+              assistantKey,
+              transcript: event.transcript
             });
-            storeConversationMemory(event.transcript, assistantResponse);
+            
+            // Store the complete memory
+            storeConversationMemory(event.transcript, memory.assistantResponse!);
             processedItemsRef.current.add(memoryKey);
-            const { [event.item_id]: _, ...rest } = newMemories;
+            
+            // Remove the pending memory
+            const { [assistantKey]: _, ...rest } = newMemories;
             return rest;
+          } else {
+            // No assistant response waiting, store the transcription
+            console.log('⏳ [Transcription] No pending assistant response, storing transcription:', {
+              transcriptionId: event.item_id,
+              transcript: event.transcript
+            });
+            
+            newMemories[event.item_id] = {
+              userMessage: event.transcript,
+              transcriptionId: event.item_id
+            };
+            return newMemories;
           }
-
-          console.log('⏳ [Transcription] Waiting for assistant response:', {
-            itemId: event.item_id,
-            transcript: event.transcript
-          });
-          return newMemories;
         });
       }
     });
@@ -369,7 +361,8 @@ export function ConsolePage() {
           console.log(`👥 [Update ${eventTime}] Processing assistant response:`, {
             assistantId: item.id,
             previousItemId: previousItem.id,
-            previousItemRole: previousItem.role
+            previousItemRole: previousItem.role,
+            pendingMemories
           });
 
           const assistantResponse = item.content?.find((c: any) => c.type === 'audio')?.transcript || '';
@@ -379,16 +372,53 @@ export function ConsolePage() {
             return;
           }
 
-          // For text input, store immediately
+          // For text input, check for VOICE_INSTRUCT and handle appropriately
           if (previousItem.content?.find((c: any) => c.type === 'input_text')) {
             const userMessage = previousItem.content.find((c: any) => c.type === 'input_text')?.text || '';
-            if (userMessage) {
-              // Check if we've already processed this item
-              if (processedItemsRef.current.has(memoryKey)) {
-                console.log('⚠️ [Update] Already processed this memory:', previousItem.id);
-                return;
-              }
+            
+            // If the message is VOICE_INSTRUCT, look for a transcription
+            if (userMessage === VOICE_INSTRUCT) {
+              console.log(`🔄 [Update ${eventTime}] VOICE_INSTRUCT detected, checking for transcription:`, {
+                previousItemId: previousItem.id,
+                pendingMemories
+              });
+              
+              // Find any pending transcription without an assistant response
+              const pendingTranscription = Object.entries(pendingMemories).find(([_, memory]) => 
+                memory.userMessage && !memory.assistantResponse
+              );
 
+              if (pendingTranscription) {
+                const [transcriptionKey, memory] = pendingTranscription;
+                console.log(`🎯 [Update ${eventTime}] Found pending transcription, storing memory:`, {
+                  transcriptionKey,
+                  userMessage: memory.userMessage,
+                  assistantResponse
+                });
+                
+                storeConversationMemory(memory.userMessage!, assistantResponse);
+                processedItemsRef.current.add(memoryKey);
+                setPendingMemories(prev => {
+                  const { [transcriptionKey]: _, ...rest } = prev;
+                  return rest;
+                });
+              } else {
+                console.log(`⏳ [Update ${eventTime}] No transcription yet, storing assistant response:`, {
+                  previousItemId: previousItem.id,
+                  assistantResponse
+                });
+                setPendingMemories(prev => ({
+                  ...prev,
+                  [previousItem.id]: {
+                    assistantResponse,
+                    voiceInstructId: previousItem.id
+                  }
+                }));
+              }
+              return;
+            }
+
+            if (userMessage && !processedItemsRef.current.has(memoryKey)) {
               console.log(`💾 [Update ${eventTime}] Storing text input memory:`, {
                 previousItemId: previousItem.id,
                 userMessage,
@@ -400,7 +430,7 @@ export function ConsolePage() {
             return;
           }
 
-          // For audio input, store in pending memories
+          // For audio input, store in pending memories and check for existing transcription
           setPendingMemories(prev => {
             console.log(`📝 [Update ${eventTime}] State before assistant update:`, {
               pendingMemories: prev,
@@ -409,25 +439,44 @@ export function ConsolePage() {
             });
 
             const newMemories = { ...prev };
+            
+            // Check if we have a transcription waiting to be paired
+            const existingTranscription = Object.entries(prev).find(
+              ([key, memory]) => key !== previousItem.id && memory.userMessage && !memory.assistantResponse
+            );
+
+            if (existingTranscription) {
+              const [transcriptionKey, memory] = existingTranscription;
+              if (memory.userMessage !== VOICE_INSTRUCT) {
+                console.log(`🎯 [Update ${eventTime}] Found waiting transcription, storing memory:`, {
+                  transcriptionKey,
+                  userMessage: memory.userMessage,
+                  assistantResponse
+                });
+                storeConversationMemory(memory.userMessage!, assistantResponse);
+                processedItemsRef.current.add(memoryKey);
+                const { [transcriptionKey]: _, ...rest } = prev;
+                return rest;
+              }
+            }
+
+            // Store assistant response and wait for transcription
             newMemories[previousItem.id] = {
               ...newMemories[previousItem.id],
               assistantResponse
             };
 
-            // Debug: Check if we have user message
             const userMessage = newMemories[previousItem.id]?.userMessage;
-            console.log(`🔍 [Update ${eventTime}] Memory state after assistant update:`, {
-              previousItemId: previousItem.id,
-              hasUserMessage: !!userMessage,
-              hasAssistantResponse: true,
-              fullState: newMemories
-            });
             
             if (userMessage) {
-              // Check if we've already processed this item
               if (processedItemsRef.current.has(memoryKey)) {
                 console.log('⚠️ [Update] Already processed this memory:', previousItem.id);
                 return prev;
+              }
+
+              if (userMessage === VOICE_INSTRUCT) {
+                console.log('🔄 [Update] VOICE_INSTRUCT detected, waiting for actual transcription');
+                return newMemories;
               }
 
               console.log(`💾 [Update ${eventTime}] Storing complete memory:`, {
