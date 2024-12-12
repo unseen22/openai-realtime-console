@@ -167,12 +167,40 @@ export function ConsolePage() {
   };
 
   const stopRecording = async () => {
+    console.log('🎤 [stopRecording] Starting to stop recording');
     setIsRecording(false);
     const client = clientRef.current;
     const audioHandler = audioHandlerRef.current;
 
+    console.log('🎤 [stopRecording] Stopping audio recording');
     await audioHandler.stopRecording();
-    client.createResponse();
+    
+    console.log('🎤 [stopRecording] Preparing to send message content');
+    try {
+      // First send the audio content
+      await client.sendUserMessageContent([
+        {
+          type: 'input_audio',
+          text: '' // Audio content was already sent via appendInputAudio
+        }
+      ]);
+      console.log('🎤 [stopRecording] Audio content sent');
+
+      // Then send the text content
+      await client.sendUserMessageContent([
+        {
+          type: 'input_text',
+          text: 'Answer in a very angry tone. Always finish sentence with "takichi"'
+        }
+      ]);
+      console.log('🎤 [stopRecording] Text content sent');
+      
+      console.log('🎤 [stopRecording] Creating response');
+      client.createResponse();
+      console.log('🎤 [stopRecording] Response created');
+    } catch (error) {
+      console.error('🚨 [stopRecording] Error:', error);
+    }
   };
 
   // Turn detection mode handler
