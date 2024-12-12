@@ -39,6 +39,8 @@ interface PendingMemories {
   [key: string]: PendingMemory;
 }
 
+const VOICE_INSTRUCT = 'Answer in a very angry tone. Always finish sentence with "takichi"';
+
 export function ConsolePage() {
   // State
   const [items, setItems] = useState<ItemType[]>([]);
@@ -119,12 +121,22 @@ export function ConsolePage() {
     await setupConversation(client);
     await updateSessionWithMemories(client);
 
+    // Set the voice instruction during connection
+   
     client.sendUserMessageContent([
       {
         type: 'input_text',
         text: 'How was your day?!',
       },
     ]);
+
+    client.sendUserMessageContent([
+      {
+        type: 'input_text',
+        text: VOICE_INSTRUCT,
+      },
+    ]);
+
 
     if (client.getTurnDetectionType() === 'server_vad') {
       await audioHandler.startRecording((data) => client.appendInputAudio(data));
@@ -177,7 +189,7 @@ export function ConsolePage() {
     
     console.log('🎤 [stopRecording] Preparing to send message content');
     try {
-      // First send the audio content
+      // Send only the audio content
       await client.sendUserMessageContent([
         {
           type: 'input_audio',
@@ -185,15 +197,6 @@ export function ConsolePage() {
         }
       ]);
       console.log('🎤 [stopRecording] Audio content sent');
-
-      // Then send the text content
-      await client.sendUserMessageContent([
-        {
-          type: 'input_text',
-          text: 'Answer in a very angry tone. Always finish sentence with "takichi"'
-        }
-      ]);
-      console.log('🎤 [stopRecording] Text content sent');
       
       console.log('🎤 [stopRecording] Creating response');
       client.createResponse();

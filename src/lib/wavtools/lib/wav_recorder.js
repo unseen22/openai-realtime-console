@@ -51,66 +51,6 @@ export class WavRecorder {
       raw: new ArrayBuffer(0),
       mono: new ArrayBuffer(0),
     };
-    // Preloaded instruction audio
-    this._instructionAudio = null;
-  }
-
-  /**
-   * Preloads and preprocesses the instruction WAV file into PCM format
-   * @private
-   * @returns {Promise<void>}
-   */
-  async _preloadInstructionAudio() {
-    try {
-      console.log('Preloading instruction audio...');
-      
-      // Load the WAV file
-      const response = await fetch('/audio_instruct/test_instruct.wav');
-      if (!response.ok) {
-        throw new Error(`Failed to load WAV file: ${response.statusText}`);
-      }
-
-      // Get the raw binary data
-      const wavBuffer = await response.arrayBuffer();
-      
-      // Create an AudioContext for decoding
-      const audioContext = new AudioContext({ sampleRate: this.sampleRate });
-      
-      // Decode the audio
-      const audioBuffer = await audioContext.decodeAudioData(wavBuffer.slice(0));
-      
-      // Convert to mono PCM16
-      const pcmData = new Int16Array(audioBuffer.length);
-      const channelData = audioBuffer.getChannelData(0); // Get first channel
-      
-      // Convert Float32 samples to Int16
-      for (let i = 0; i < channelData.length; i++) {
-        // Convert float (-1 to 1) to int16 (-32768 to 32767)
-        pcmData[i] = Math.max(-32768, Math.min(32767, Math.floor(channelData[i] * 32767)));
-      }
-      
-      console.log('Instruction audio preprocessed:', {
-        originalLength: audioBuffer.length,
-        channels: audioBuffer.numberOfChannels,
-        sampleRate: audioBuffer.sampleRate,
-        duration: audioBuffer.duration,
-        pcmLength: pcmData.length,
-        firstSamples: Array.from(pcmData.slice(0, 5)),
-        lastSamples: Array.from(pcmData.slice(-5))
-      });
-      
-      // Store the preprocessed audio
-      this._instructionAudio = {
-        mono: pcmData,
-        raw: pcmData,
-        sampleRate: audioBuffer.sampleRate,
-        duration: audioBuffer.duration
-      };
-      
-    } catch (error) {
-      console.error('Error preloading instruction audio:', error);
-      throw error;
-    }
   }
 
   /**
@@ -365,9 +305,6 @@ export class WavRecorder {
       );
     }
 
-    // Preload instruction audio before starting
-    await this._preloadInstructionAudio();
-
     if (
       !navigator.mediaDevices ||
       !('getUserMedia' in navigator.mediaDevices)
@@ -471,17 +408,16 @@ export class WavRecorder {
   /**
    * Pauses the recording
    * Keeps microphone stream open but halts storage of audio
-   * @param {boolean} [appendInstruct=true] Whether to append the instruction audio
+   * @param {boolean} [appendInstruct=false] Whether to append the instruction audio
    * @returns {Promise<{mono: Int16Array, raw: Int16Array}>}
    */
-  async pause(appendInstruct = true) {
+  async pause(appendInstruct = false) {
     if (!this.processor) {
       throw new Error('Session ended: please call .begin() first');
     } else if (!this.recording) {
       throw new Error('Already paused: please call .record() first');
     }
 
-    // First stop recording to prevent more chunks being added
     this.log('Pausing ...');
     await this._event('stop');
     this.recording = false;
@@ -491,83 +427,6 @@ export class WavRecorder {
       raw: new ArrayBuffer(0),
       mono: new ArrayBuffer(0)
     };
-
-    // If instruction audio should be appended
-    if (appendInstruct && this._instructionAudio) {
-      try {
-        // Get only the most recent chunk
-        console.log('Getting most recent audio chunk...');
-        const currentAudio = await this._event('read');
-        
-        if (!currentAudio?.meanValues) {
-          console.error('No current audio chunk available');
-          // Use preprocessed instruction audio directly
-          if (this._chunkProcessor) {
-            console.log('Sending instruction audio only:', {
-              size: this._instructionAudio.mono.length,
-              firstSamples: Array.from(this._instructionAudio.mono.slice(0, 5)),
-              lastSamples: Array.from(this._instructionAudio.mono.slice(-5))
-            });
-            this._chunkProcessor({
-              mono: this._instructionAudio.mono,
-              raw: this._instructionAudio.raw
-            });
-          }
-          return this._instructionAudio;
-        }
-
-        // Convert the float32 mean values to Int16
-        const currentData = new Int16Array(currentAudio.meanValues.length);
-        for (let i = 0; i < currentAudio.meanValues.length; i++) {
-          currentData[i] = Math.max(-32768, Math.min(32767, Math.floor(currentAudio.meanValues[i] * 32767)));
-        }
-
-        console.log('Buffer sizes:', {
-          currentDataLength: currentData.length,
-          instructionLength: this._instructionAudio.mono.length,
-          calculatedTotalLength: currentData.length + this._instructionAudio.mono.length
-        });
-        
-        // Create a new buffer that can hold both the current chunk and the instruction
-        const totalLength = currentData.length + this._instructionAudio.mono.length;
-        const mergedData = new Int16Array(totalLength);
-        
-        // Copy the current chunk
-        mergedData.set(currentData, 0);
-        
-        // Append the instruction audio
-        mergedData.set(this._instructionAudio.mono, currentData.length);
-
-        // Clear existing chunks to prevent duplication
-        await this._event('clear');
-
-        // Send the final merged chunk
-        if (this._chunkProcessor) {
-          console.log('Sending final merged chunk:', {
-            totalLength: mergedData.length,
-            firstSamples: Array.from(mergedData.slice(0, 5)),
-            lastSamples: Array.from(mergedData.slice(-5))
-          });
-          
-          this._chunkProcessor({
-            mono: mergedData,
-            raw: mergedData
-          });
-        }
-
-        return {
-          mono: mergedData,
-          raw: mergedData
-        };
-      } catch (error) {
-        console.error('Error appending instruction audio:', error);
-        console.error('Error stack:', error.stack);
-        return {
-          mono: new Int16Array(0),
-          raw: new Int16Array(0)
-        };
-      }
-    }
 
     return {
       mono: new Int16Array(0),
@@ -876,10 +735,10 @@ export class WavRecorder {
 
   /**
    * Ends the current recording session and saves the result
-   * @param {boolean} [appendInstruct=true] Whether to append the instruction audio
+   * @param {boolean} [appendInstruct=false] Whether to append the instruction audio
    * @returns {Promise<import('./wav_packer.js').WavPackerAudioType>}
    */
-  async end(appendInstruct = true) {
+  async end(appendInstruct = false) {
     if (!this.processor) {
       throw new Error('Session ended: please call .begin() first');
     }
@@ -900,70 +759,6 @@ export class WavRecorder {
       throw new Error('No valid audio data received from recorder');
     }
     
-    console.log('Original audio data:', {
-      channels: exportData.audio.channels.length,
-      dataLength: exportData.audio.data.length,
-      firstSamples: Array.from(exportData.audio.data.slice(0, 5)),
-      lastSamples: Array.from(exportData.audio.data.slice(-5))
-    });
-
-    // Add instruction WAV if enabled
-    if (appendInstruct) {
-      try {
-        console.log('Loading instruction WAV...');
-        const instructWavBuffer = await this._loadInstructWav();
-        
-        console.log('Creating chunk from instruction WAV...');
-        const extraChunk = await this.createChunkFromWav(instructWavBuffer);
-        
-        // Merge the extra chunk with the existing audio
-        console.log('Merging chunks...');
-        
-        // Create a new Int16Array with space for both chunks
-        const totalLength = exportData.audio.data.length + extraChunk.raw.length;
-        const mergedData = new Int16Array(totalLength);
-        
-        // Copy the original data
-        mergedData.set(new Int16Array(exportData.audio.data));
-        
-        // Append the extra chunk
-        mergedData.set(extraChunk.raw, exportData.audio.data.length);
-        
-        console.log('Merged data:', {
-          originalLength: exportData.audio.data.length,
-          extraLength: extraChunk.raw.length,
-          mergedLength: mergedData.length,
-          firstSamples: Array.from(mergedData.slice(0, 5)),
-          lastSamples: Array.from(mergedData.slice(-5))
-        });
-
-        // Update the channels data
-        const mergedChannels = exportData.audio.channels.map(channel => {
-          const newChannel = new Float32Array(channel.length + extraChunk.mono.length);
-          newChannel.set(new Float32Array(channel));
-          newChannel.set(new Float32Array(extraChunk.mono.map(x => x / 32767)), channel.length);
-          return newChannel;
-        });
-
-        exportData.audio = {
-          ...exportData.audio,
-          data: mergedData,
-          channels: mergedChannels,
-          bitsPerSample: 16
-        };
-
-        console.log('Final audio data:', {
-          channels: exportData.audio.channels.length,
-          dataLength: exportData.audio.data.length,
-          firstSamples: Array.from(exportData.audio.data.slice(0, 5)),
-          lastSamples: Array.from(exportData.audio.data.slice(-5))
-        });
-      } catch (error) {
-        console.error('Error appending instruction audio:', error);
-        // Continue with original audio if appending fails
-      }
-    }
-
     this.processor.disconnect();
     this.source.disconnect();
     this.node.disconnect();
