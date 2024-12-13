@@ -181,25 +181,27 @@ export function ConsolePage() {
     const audioData = await audioHandler.stopRecording();
     
     console.log('🎤 [stopRecording] Preparing to send message content');
-    try {
-      // First send the audio content to OpenAI
-      await client.sendUserMessageContent([
-        {
-          type: 'input_audio',
-          text: '' // Audio content was already sent via appendInputAudio
-        }
-      ]);
-      console.log('🎤 [stopRecording] Audio content sent to OpenAI');
+    
+    console.log('🎤 [stopRecording] Audio content sent to OpenAI');
 
+    try {
       // Send to local transcribe endpoint
       if (audioData) {
         const localTranscription = await transcribeLocal(audioData);
         if (localTranscription && localTranscription.text) {
           console.log('🎤 [LOCAL] Transcription received:', localTranscription.text);
           // Append transcribed text to voiceInstruct
-          const updatedInstruct = `${voiceInstruct}. ${localTranscription.search_results}`;
+          const updatedInstruct = `${VOICE_INSTRUCT}. These are relevant memories: ${localTranscription.search_results}`;
           setVoiceInstruct(updatedInstruct);
           console.log('🎤 [INCOMING] NEW APPENDED TEXT:', updatedInstruct);
+          
+          // First send the audio content to OpenAI
+          await client.sendUserMessageContent([
+            {
+              type: 'input_audio',
+              text: '' // Audio content was already sent via appendInputAudio
+            }
+          ]);
           
           // Send the updated instructions
           await client.sendUserMessageContent([
