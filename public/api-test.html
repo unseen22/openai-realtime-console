@@ -196,7 +196,19 @@
         <div id="init-personas-response" class="response"></div>
     </div>
 
-    
+    <div class="endpoint">
+        <h3>POST /memories/search</h3>
+        <div class="persona-selector">
+            <select id="search-memories-persona-id">
+                <option value="">Select a Persona</option>
+            </select>
+            <button onclick="loadAvailablePersonas()" title="Refresh personas list">🔄</button>
+        </div>
+        <input type="text" id="search-query" placeholder="Search query">
+        <input type="number" id="top-k" placeholder="Number of results" value="3" min="1" max="10">
+        <button onclick="searchMemories()">Search Similar Memories</button>
+        <div id="search-memories-response" class="response"></div>
+    </div>
 
     <script>
         const API_URL = 'http://localhost:8081';
@@ -329,19 +341,23 @@
                     throw new Error('No personas returned from initialization');
                 }
                 
-                // Get both select elements
+                // Get all select elements
                 const storePersonaSelect = document.getElementById('store-memory-persona-id');
                 const getPersonaSelect = document.getElementById('get-memories-persona-id');
+                const searchPersonaSelect = document.getElementById('search-memories-persona-id');
                 
-                // Clear existing options except the first one for both selects
+                // Clear existing options except the first one for all selects
                 while (storePersonaSelect.options.length > 1) {
                     storePersonaSelect.remove(1);
                 }
                 while (getPersonaSelect.options.length > 1) {
                     getPersonaSelect.remove(1);
                 }
+                while (searchPersonaSelect.options.length > 1) {
+                    searchPersonaSelect.remove(1);
+                }
                 
-                // Get details for each persona and add to both selects
+                // Get details for each persona and add to all selects
                 for (const personaId of initResponse.initialized_personas) {
                     try {
                         // Get persona details
@@ -351,15 +367,19 @@
                         // Create option elements
                         const storeOption = document.createElement('option');
                         const getOption = document.createElement('option');
+                        const searchOption = document.createElement('option');
                         
                         storeOption.value = personaId;
                         storeOption.text = `${personaId}`;
                         getOption.value = personaId;
                         getOption.text = `${personaId}`;
+                        searchOption.value = personaId;
+                        searchOption.text = `${personaId}`;
                         
-                        // Add options to both selects
+                        // Add options to all selects
                         storePersonaSelect.appendChild(storeOption);
                         getPersonaSelect.appendChild(getOption);
+                        searchPersonaSelect.appendChild(searchOption);
                     } catch (error) {
                         console.error(`Error fetching details for persona ${personaId}:`, error);
                     }
@@ -368,12 +388,16 @@
                 console.log("Finished loading personas");
             } catch (error) {
                 console.error('Error loading personas:', error);
-                // Show error in both response areas
+                // Show error in all response areas
                 displayResponse('store-memory-response', {
                     error: 'Failed to load personas',
                     details: error.message
                 });
                 displayResponse('memories-response', {
+                    error: 'Failed to load personas',
+                    details: error.message
+                });
+                displayResponse('search-memories-response', {
                     error: 'Failed to load personas',
                     details: error.message
                 });
@@ -441,6 +465,32 @@
             const data = await callEndpoint(`/memory/${personaId}/${encodedMemoryId}`, 'DELETE');
             displayResponse('memories-response', data);
             getMemories(); // Refresh the list
+        }
+
+        async function searchMemories() {
+            const personaId = document.getElementById('search-memories-persona-id').value;
+            const query = document.getElementById('search-query').value;
+            const topK = document.getElementById('top-k').value;
+
+            if (!personaId) {
+                displayResponse('search-memories-response', {
+                    error: 'Please select a Persona'
+                });
+                return;
+            }
+
+            if (!query) {
+                displayResponse('search-memories-response', {
+                    error: 'Please enter a search query'
+                });
+                return;
+            }
+
+            const data = await callEndpoint(
+                `/memories/search?query=${encodeURIComponent(query)}&persona_id=${encodeURIComponent(personaId)}&top_k=${topK}`,
+                'POST'
+            );
+            displayResponse('search-memories-response', data);
         }
 
         document.addEventListener('DOMContentLoaded', loadAvailablePersonas);

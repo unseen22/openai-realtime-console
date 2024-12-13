@@ -76,6 +76,8 @@ export const storeConversationMemory = async (
       const data = await response.json();
       if (data.status === 'success') {
         console.log('Conversation memory stored successfully');
+      } else if (data.status === 'duplicate') {
+        console.log('Conversation memory already exists, skipping storage');
       } else {
         console.log('Failed to store conversation memory:', data);
       }

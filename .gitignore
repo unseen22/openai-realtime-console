@@ -32,3 +32,4 @@ yarn-error.log*
 /venv
 /brain/__pycache__
 /__pycache__
+/models

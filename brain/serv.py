@@ -2,14 +2,16 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 
 from brain.brain import Brain
 from brain.memory import Memory, MemoryType
 from brain.fake_memories import create_fake_memories_for_persona, init_all_persona_memories
+from brain.init_personas import init_persona_brains
 
 app = FastAPI()
 
@@ -22,8 +24,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Brain
-brain = Brain(persona_id="default")
+# Initialize brains for all personas
+init_persona_brains()
 
 # After app initialization, add brain registry
 brain_registry: Dict[str, Brain] = {}
@@ -44,6 +46,20 @@ class ConversationItem(BaseModel):
     speaker: str
     content: str
     timestamp: Optional[str] = None
+
+class MemoryCreate(BaseModel):
+    content: str
+    memory_type: str = "CONVERSATION"
+    importance: float = 0.5
+
+class MemoryResponse(BaseModel):
+    content: str
+    timestamp: datetime
+    importance: float
+    similarity: Optional[float] = None
+
+class SearchResponse(BaseModel):
+    memories: List[MemoryResponse]
 
 @app.get("/")
 async def read_root():
@@ -308,4 +324,45 @@ async def delete_memory(persona_id: str, memory_id: str):
             "message": f"Memory '{memory_id}' deleted from persona '{persona_id}'"
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/memories/search")
+async def search_memories(query: str, persona_id: str = "default", top_k: int = 3) -> SearchResponse:
+    """Search for similar memories for a specific persona"""
+    try:
+        print(f"\nSearching memories for persona '{persona_id}' with query: {query}")
+        
+        if not persona_id:
+            raise HTTPException(status_code=400, detail="persona_id is required")
+            
+        brain = Brain(persona_id)
+        
+        # Get all memories first to check if we have any
+        all_memories = brain.get_all_memories()
+        print(f"Total memories found for persona '{persona_id}': {len(all_memories)}")
+        
+        if not all_memories:
+            print(f"No memories found for persona '{persona_id}'")
+            return SearchResponse(memories=[])
+        
+        # Search for similar memories
+        similar_memories = brain.search_similar_memories(query, top_k)
+        print(f"Found {len(similar_memories)} similar memories")
+        
+        # Convert to response format
+        memory_responses = []
+        for memory, similarity in similar_memories:
+            print(f"Memory: {memory.content[:100]}... (similarity: {similarity:.4f})")
+            memory_responses.append(
+                MemoryResponse(
+                    content=memory.content,
+                    timestamp=memory.timestamp,
+                    importance=memory.importance,
+                    similarity=similarity
+                )
+            )
+        
+        return SearchResponse(memories=memory_responses)
+    except Exception as e:
+        print(f"Error in search_memories: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
