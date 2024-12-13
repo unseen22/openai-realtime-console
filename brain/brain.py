@@ -6,6 +6,8 @@ from datetime import datetime
 from brain.memory import Memory, MemoryType
 from brain.database import Database
 from brain.embedder import Embedder
+from brain.groq_tool import GroqTool
+from pathlib import Path
 
 class Brain:
     def __init__(self, persona_id: str, db_path: str = "memories.db"):
@@ -29,12 +31,45 @@ class Brain:
         """Create embeddings using BGE model"""
         return self.embedder.embed_memory(text)
 
-    def calculate_importance(self, text: str) -> float:
+    def calculate_importance(self, content: str) -> float:
+        """Judge the importance of the content based on the persona's profile using Groq LLM.
+        
+        Args:
+            content: The text content to evaluate importance for
+            
+        Returns:
+            Float between 0-1 indicating importance score
         """
-        Placeholder for importance calculation.
-        TODO: Implement actual importance calculation logic
-        """
-        return 0.5  # Placeholder fixed value
+        # Get persona profile from voice_instruct.json
+        with open(Path(__file__).parent / "personas" / "voice_instruct.json", 'r') as f:
+            personas = json.load(f)
+            
+        if self.persona_id not in personas:
+            print(f"Warning: Persona {self.persona_id} not found in voice_instruct.json")
+            return 0.5
+            
+        profile = personas[self.persona_id]["profile_prompt"]
+        
+        # Create prompt for importance evaluation
+        prompt = f"""Given the following persona profile:
+{profile}
+
+Please evaluate how important/relevant this experience is to the persona on a scale of 0.0 to 1.0:
+"{content}"
+
+Return only a single float number between 0.0 and 1.0 representing the importance score."""
+
+        # Get importance score from Groq
+        groq = GroqTool()
+        try:
+            response = groq.generate_text(prompt, temperature=0.1)
+            print(f"Groq response: {response}")
+            score = float(response.strip())
+            # Clamp between 0 and 1
+            return max(0.0, min(1.0, score))
+        except Exception as e:
+            print(f"Error getting importance score: {e}")
+            return 0.5
 
     def has_duplicate_content(self, content: str) -> bool:
         """Check if a memory with the same content already exists"""
@@ -153,6 +188,46 @@ class Brain:
             "param2": param2,
             "result": "Function executed successfully"
         }
+    
+    def importance_judge(self, content: str) -> float:
+        """Judge the importance of the content based on the persona's profile using Groq LLM.
+        
+        Args:
+            content: The text content to evaluate importance for
+            
+        Returns:
+            Float between 0-1 indicating importance score
+        """
+        # Get persona profile from voice_instruct.json
+        with open(Path(__file__).parent / "personas" / "voice_instruct.json", 'r') as f:
+            personas = json.load(f)
+            
+        if self.persona_id not in personas:
+            print(f"Warning: Persona {self.persona_id} not found in voice_instruct.json")
+            return 0.5
+            
+        profile = personas[self.persona_id]["profile_prompt"]
+        
+        # Create prompt for importance evaluation
+        prompt = f"""Given the following persona profile:
+{profile}
+
+Please evaluate how important/relevant this experience is to the persona on a scale of 0.0 to 1.0:
+"{content}"
+
+Return only a single float number between 0.0 and 1.0 representing the importance score."""
+
+        # Get importance score from Groq
+        groq = GroqTool()
+        try:
+            response = groq.generate_text(prompt, temperature=0.1)
+            print(f"Groq response: {response}")
+            score = float(response.strip())
+            # Clamp between 0 and 1
+            return max(0.0, min(1.0, score))
+        except Exception as e:
+            print(f"Error getting importance score: {e}")
+            return 0.5
 
     def set_mood(self, mood: str):
         """Set the current mood"""

@@ -242,7 +242,34 @@
 
         async function displayResponse(elementId, data) {
             const element = document.getElementById(elementId);
-            element.textContent = JSON.stringify(data, null, 2);
+            
+            // Deep clone the data to avoid modifying the original
+            let displayData = JSON.parse(JSON.stringify(data));
+            
+            // Helper function to truncate vectors
+            const truncateVector = (obj) => {
+                if (obj && typeof obj === 'object') {
+                    if (Array.isArray(obj.vector) && obj.vector.length > 3) {
+                        obj.vector = obj.vector.slice(0, 3);
+                        obj.vector.push('...');
+                    }
+                    // Recursively process nested objects and arrays
+                    Object.keys(obj).forEach(key => {
+                        if (typeof obj[key] === 'object' && obj[key] !== null) {
+                            truncateVector(obj[key]);
+                        }
+                    });
+                }
+            };
+            
+            // Process the data
+            if (Array.isArray(displayData)) {
+                displayData.forEach(item => truncateVector(item));
+            } else {
+                truncateVector(displayData);
+            }
+            
+            element.textContent = JSON.stringify(displayData, null, 2);
         }
 
         // Endpoint handlers
