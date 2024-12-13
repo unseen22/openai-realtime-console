@@ -11,6 +11,8 @@
 const LOCAL_RELAY_SERVER_URL: string =
   process.env.REACT_APP_LOCAL_RELAY_SERVER_URL || '';
 
+const VOICE_INSTRUCT = "Speak in an angry tone. Always finish sentence with 'takichi'";
+
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { ItemType } from '@openai/realtime-api-beta/dist/lib/client.js';
 import { X, Edit, Zap } from 'react-feather';
@@ -25,7 +27,7 @@ import { ConversationView } from '../components/ConversationView';
 import { WeatherMap } from '../components/WeatherMap';
 import { MemoryView } from '../components/MemoryView';
 import { Coordinates, RealtimeEvent, MemoryKV } from '../types/console';
-import { setupConversation, updateSessionWithMemories, storeConversationMemory } from '../services/conversationService';
+import { setupConversation, updateSessionWithMemories, storeConversationMemory, transcribeLocal } from '../services/conversationService';
 
 import './ConsolePage.scss';
 
@@ -56,6 +58,7 @@ export function ConsolePage() {
     lng: -122.418137,
   });
   const [marker, setMarker] = useState<Coordinates | null>(null);
+  const [voiceInstruct, setVoiceInstruct] = useState(VOICE_INSTRUCT);
 
   // Refs
   const clientCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -103,7 +106,7 @@ export function ConsolePage() {
       window.location.reload();
     }
   }, []);
-  const VOICE_INSTRUCT = "Speak in an angry tone. Always finish sentence with 'takichi'"
+
   // Connection handlers
   const connectConversation = useCallback(async () => {
     const client = clientRef.current;
@@ -175,27 +178,38 @@ export function ConsolePage() {
     const audioHandler = audioHandlerRef.current;
 
     console.log('🎤 [stopRecording] Stopping audio recording');
-    await audioHandler.stopRecording();
+    const audioData = await audioHandler.stopRecording();
     
     console.log('🎤 [stopRecording] Preparing to send message content');
     try {
-      // First send the audio content
+      // First send the audio content to OpenAI
       await client.sendUserMessageContent([
         {
           type: 'input_audio',
           text: '' // Audio content was already sent via appendInputAudio
         }
       ]);
-      console.log('🎤 [stopRecording] Audio content sent');
+      console.log('🎤 [stopRecording] Audio content sent to OpenAI');
 
-      // Then send the text content
-      await client.sendUserMessageContent([
-        {
-          type: 'input_text',
-          text: VOICE_INSTRUCT
+      // Send to local transcribe endpoint
+      if (audioData) {
+        const localTranscription = await transcribeLocal(audioData);
+        if (localTranscription && localTranscription.text) {
+          console.log('🎤 [LOCAL] Transcription received:', localTranscription.text);
+          // Append transcribed text to voiceInstruct
+          const updatedInstruct = `${voiceInstruct}. ${localTranscription.search_results}`;
+          setVoiceInstruct(updatedInstruct);
+          console.log('🎤 [INCOMING] NEW APPENDED TEXT:', updatedInstruct);
+          
+          // Send the updated instructions
+          await client.sendUserMessageContent([
+            {
+              type: 'input_text',
+              text: updatedInstruct
+            }
+          ]);
         }
-      ]);
-      console.log('🎤 [stopRecording] Text content sent');
+      }
       
       console.log('🎤 [stopRecording] Creating response');
       client.createResponse();

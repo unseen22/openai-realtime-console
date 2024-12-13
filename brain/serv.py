@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -7,11 +7,14 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
+import openai
+import tempfile
 
 from brain.brain import Brain
 from brain.memory import Memory, MemoryType
 from brain.fake_memories import create_fake_memories_for_persona, init_all_persona_memories
 from brain.init_personas import init_persona_brains
+from brain.transcription import transcription_handler
 
 app = FastAPI()
 
@@ -327,7 +330,7 @@ async def delete_memory(persona_id: str, memory_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/memories/search")
-async def search_memories(query: str, persona_id: str = "default", top_k: int = 3) -> SearchResponse:
+async def search_memories(query: str, persona_id: str = "pink_man", top_k: int = 3) -> SearchResponse:
     """Search for similar memories for a specific persona"""
     try:
         print(f"\nSearching memories for persona '{persona_id}' with query: {query}")
@@ -365,4 +368,28 @@ async def search_memories(query: str, persona_id: str = "default", top_k: int = 
         return SearchResponse(memories=memory_responses)
     except Exception as e:
         print(f"Error in search_memories: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/transcribe/local")
+async def transcribe_audio(audio_file: UploadFile = File(...)):
+    """Transcribe audio using OpenAI Whisper API and search memories"""
+    try:
+        content = await audio_file.read()
+        transcribed_text = await transcription_handler.transcribe_audio(content)
+        
+        # Search memories using the transcribed text
+        search_results = await search_memories(query=transcribed_text)
+        
+        # Convert search results to concatenated string
+        search_results_text = "\n".join([
+            f"{memory.content}" for memory in search_results.memories
+        ])
+
+        return {
+            "text": transcribed_text, 
+            "search_results": search_results_text,
+            "status": "success"
+        }
+    except Exception as e:
+        print(f"Error in transcribe_audio endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

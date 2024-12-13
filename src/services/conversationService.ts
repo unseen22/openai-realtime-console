@@ -17,6 +17,80 @@ interface MemoryResponse {
   memories: Memory[];
 }
 
+interface TranscriptionResponse {
+  text: string;
+  search_results?: string;
+  status?: string;
+}
+
+export const transcribeLocal = async (audioData: Int16Array): Promise<TranscriptionResponse | null> => {
+  if (!LOCAL_RELAY_SERVER_URL) {
+    console.log('LOCAL_RELAY_SERVER_URL not set');
+    return null;
+  }
+
+  try {
+    // Log audio data details
+    console.log('🎤 [LOCAL] Audio data stats:', {
+      samples: audioData.length,
+      sampleRate: '24kHz',
+      duration: `${(audioData.length / 24000).toFixed(2)}s`
+    });
+
+    // Create WAV blob from the buffer directly
+    const audioBuffer = audioData.buffer;
+    const blob = new Blob([audioBuffer], { type: 'audio/wav' });
+    
+    console.log('🎤 [LOCAL] Created WAV blob:', {
+      size: `${(blob.size / 1024).toFixed(2)}KB`,
+      type: blob.type
+    });
+
+    // Send to server
+    const formData = new FormData();
+    formData.append('audio_file', blob, 'recording.wav');
+    console.log('🎤 [LOCAL] Sending audio to transcribe endpoint');
+    
+    const response = await fetch(`${LOCAL_RELAY_SERVER_URL}/transcribe/local`, {
+      method: 'POST',
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorDetail;
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorDetail = errorJson.detail;
+      } catch {
+        errorDetail = errorText;
+      }
+      console.error('[LOCAL] Transcription failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorDetail
+      });
+      return null;
+    }
+    
+    const data = await response.json();
+    console.log('🎤 [LOCAL] X Transcription successful:', data);
+    
+    // Return the transcribed text to be appended to VOICE_INSTRUCT
+    if (data && data.text) {
+      return {
+        text: data.text,
+        search_results: data.search_results,
+        status: data.status || 'success'
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('[LOCAL] Error in transcribeLocal:', error);
+    return null;
+  }
+};
+
 export const setupConversation = async (client: RealtimeClient) => {
   // Set up conversation configuration with default values first
   await client.updateSession({

@@ -1,5 +1,6 @@
 import { WavRecorder, WavStreamPlayer } from '../lib/wavtools/index.js';
 import { RealtimeClient } from '@openai/realtime-api-beta';
+import { transcribeLocal } from './conversationService';
 
 export class AudioHandler {
   private wavRecorder: WavRecorder;
@@ -28,6 +29,9 @@ export class AudioHandler {
 
   async stopRecording() {
     await this.wavRecorder.pause();
+    const audioData = await this.wavRecorder.save();
+    const arrayBuffer = await audioData.blob.arrayBuffer();
+    return new Int16Array(arrayBuffer);
   }
 
   async playAudio(audioData: Uint8Array, trackId: string) {
@@ -56,5 +60,11 @@ export class AudioHandler {
 
   static async decodeAudio(audio: Uint8Array) {
     return await WavRecorder.decode(audio, 24000, 24000);
+  }
+
+  async transcribeAudio(): Promise<string | null> {
+    const audioData = await this.stopRecording();
+    const transcription = await transcribeLocal(audioData);
+    return transcription?.text || null;
   }
 } 
