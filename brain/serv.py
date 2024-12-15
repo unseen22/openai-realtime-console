@@ -377,19 +377,32 @@ async def transcribe_audio(audio_file: UploadFile = File(...)):
         content = await audio_file.read()
         transcribed_text = await transcription_handler.transcribe_audio(content)
         
-        # Search memories using the transcribed text
-        search_results = await search_memories(query=transcribed_text)
+        # Search memories using the transcribed text with explicit top_k
+        search_results = await search_memories(
+            query=transcribed_text,
+            persona_id="pink_man",  # Or make this configurable
+            top_k=3  # Explicitly set to return only top 3 memories
+        )
         
         # Convert search results to concatenated string
         search_results_text = "\n".join([
             f"{memory.content}" for memory in search_results.memories
         ])
 
-        return {
-            "text": transcribed_text, 
-            "search_results": search_results_text,
+        response = {
+            "text": transcribed_text,
+            "search_results": search_results_text, 
             "status": "success"
         }
+
+        # Clean up variables
+        del content
+        del transcribed_text
+        del search_results
+        del search_results_text
+
+        return response
+
     except Exception as e:
         print(f"Error in transcribe_audio endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

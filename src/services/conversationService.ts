@@ -76,11 +76,24 @@ export const transcribeLocal = async (audioData: Int16Array): Promise<Transcript
     const data = await response.json();
     console.log('🎤 [LOCAL] X Transcription successful:', data);
     
-    // Return the transcribed text to be appended to VOICE_INSTRUCT
     if (data && data.text) {
+      let cleanedSearchResults = '';
+      
+      if (data.search_results) {
+        // Split by common delimiters and take only relevant parts
+        const parts = data.search_results
+          .split(/(?:This is the question being asked:|These are relevant memories:|Speak in an angry tone)/)
+          .filter(Boolean)  // Remove empty strings
+          .map((part: string) => part.trim())
+          .filter((part: string) => part && !part.includes('takichi')); // Remove parts with 'takichi'
+
+        // Take only the most recent meaningful memory
+        cleanedSearchResults = parts[0] || '';
+      }
+      
       return {
         text: data.text,
-        search_results: data.search_results,
+        search_results: cleanedSearchResults,
         status: data.status || 'success'
       };
     }
@@ -95,7 +108,7 @@ export const setupConversation = async (client: RealtimeClient) => {
   // Set up conversation configuration with default values first
   await client.updateSession({
     instructions: instructions,
-    voice: 'alloy',
+    voice: 'ash',
     input_audio_transcription: { model: 'whisper-1' }
   });
 }; 

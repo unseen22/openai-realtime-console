@@ -24,9 +24,7 @@ def create_fake_memories_for_persona(persona_id: str, brain: Brain):
     
     # Create some basic memories
     memories = [
-        f"My name is {persona['name']}",
         persona['profile_prompt'],
-        f"I speak with {persona['voice_instruct']}",
         persona['opener_prompt']
     ]
     

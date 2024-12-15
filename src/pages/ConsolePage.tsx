@@ -37,11 +37,26 @@ interface PendingMemory {
   assistantResponse?: string;
   transcriptionId?: string;
   voiceInstructId?: string;
+  timestamp?: number;
 }
 
 interface PendingMemories {
   [key: string]: PendingMemory;
 }
+
+const MEMORY_TIMEOUT = 15000; // 15 seconds timeout for pending memories
+
+const cleanupMemories = (memories: PendingMemories): PendingMemories => {
+  const now = Date.now();
+  return Object.entries(memories).reduce((acc, [key, memory]) => {
+    if (!memory.timestamp || now - memory.timestamp > MEMORY_TIMEOUT) {
+      console.log('🧹 [Cleanup] Removing stale memory:', key);
+      return acc;
+    }
+    acc[key] = memory;
+    return acc;
+  }, {} as PendingMemories);
+};
 
 export function ConsolePage() {
   // State
@@ -127,7 +142,7 @@ export function ConsolePage() {
     client.sendUserMessageContent([
       {
         type: 'input_text',
-        text: 'How was your day?!',
+        text: 'How was your day?! Answer in 1 sentence.',
       },
     ]);
 
@@ -141,6 +156,9 @@ export function ConsolePage() {
     setRealtimeEvents([]);
     setItems([]);
     setMemoryKv({});
+    setPendingMemories({});
+    processedItemsRef.current.clear();
+    setVoiceInstruct('');
     setCoords({
       lat: 37.775593,
       lng: -122.418137,
@@ -178,46 +196,114 @@ export function ConsolePage() {
     const audioHandler = audioHandlerRef.current;
 
     console.log('🎤 [stopRecording] Stopping audio recording');
-    const audioData = await audioHandler.stopRecording();
+    
+    
     
     console.log('🎤 [stopRecording] Preparing to send message content');
     
     console.log('🎤 [stopRecording] Audio content sent to OpenAI');
-
+    
     try {
-      // Send to local transcribe endpoint
+      // Stop recording and get audioData
+      const audioData = await audioHandler.stopRecording();
+    
       if (audioData) {
-        const localTranscription = await transcribeLocal(audioData);
+        const transcribePromise = transcribeLocal(audioData);
+    
+        let filterMessageSent = false;
+    
+        // Set a 0.5 second timer to send "filter thinking sound"
+        const timeoutId = setTimeout(async () => {
+          try {
+
+
+            await client.sendUserMessageContent([
+              {
+                type: 'input_audio',
+                text: '' // indicates that the user's audio turn is complete
+              }
+            ]);
+
+            await client.sendUserMessageContent([
+              {
+                type: 'input_text',
+                text: "Make a brief thinking or acknowledgment sound like 'hmm', 'uhh', 'let me see', 'ah', 'oh', 'one moment', 'I see', 'right', or 'okay'. Keep it very brief and natural sounding. Nothing more. Connect a few of these sounds together."
+              }
+            ]);
+            filterMessageSent = true;
+          } catch (err) {
+            console.error('Error sending filter thinking sound message:', err);
+          }
+        }, 500);
+    
+        // Wait for transcription
+        const localTranscription = await transcribePromise;
+    
+        // Clear the timeout if not fired yet
+        clearTimeout(timeoutId);
+    
+        // Now you have the transcription. Construct updated instructions
         if (localTranscription && localTranscription.text) {
           console.log('🎤 [LOCAL] Transcription received:', localTranscription.text);
-          // Append transcribed text to voiceInstruct
-          const updatedInstruct = `${VOICE_INSTRUCT}. These are relevant memories: ${localTranscription.search_results}`;
-          setVoiceInstruct(updatedInstruct);
-          console.log('🎤 [INCOMING] NEW APPENDED TEXT:', updatedInstruct);
           
-          // First send the audio content to OpenAI
+          // Interrupt any playing audio (like thinking sounds)
+          const trackSampleOffset = await audioHandler.interruptPlayback();
+          if (trackSampleOffset?.trackId) {
+            const { trackId, offset } = trackSampleOffset;
+            await client.cancelResponse(trackId, offset);
+          }
+
+          // Clean and format the instruction
+          const cleanedText = localTranscription.text.trim();
+          
+          // Only include memories if they exist and are meaningful
+          let memoryPart = '';
+          if (localTranscription.search_results && localTranscription.search_results.trim()) {
+            memoryPart = `. These are relevant memories: ${localTranscription.search_results.trim()}`;
+          }
+
+          const updatedInstruct = `This is the question being asked: ${cleanedText}${memoryPart} ${VOICE_INSTRUCT}`;
+          console.log('🎤 [INCOMING] NEW APPENDED TEXT:', updatedInstruct);
+    
+          // Now finalize the user turn by sending input_audio
           await client.sendUserMessageContent([
             {
               type: 'input_audio',
-              text: '' // Audio content was already sent via appendInputAudio
+              text: '' // indicates that the user's audio turn is complete
             }
           ]);
-          
+    
           // Send the updated instructions
           await client.sendUserMessageContent([
             {
-              type: 'input_text',
+              type: 'input_text', 
               text: updatedInstruct
             }
           ]);
+
+          // Clear everything after sending
+          setVoiceInstruct('');
+          
+          // Create a new empty object for localTranscription
+          Object.assign(localTranscription, {
+            text: '',
+            search_results: '',
+            status: ''
+          });
+          
+          // Clear any pending memories related to this transcription
+          setPendingMemories(prev => {
+            const cleanedMemories = cleanupMemories(prev);
+            return Object.fromEntries(
+              Object.entries(cleanedMemories).filter(([_, memory]) => 
+                memory.timestamp && Date.now() - memory.timestamp < MEMORY_TIMEOUT
+              )
+            );
+          });
         }
       }
-      
-      console.log('🎤 [stopRecording] Creating response');
-      client.createResponse();
-      console.log('🎤 [stopRecording] Response created');
     } catch (error) {
-      console.error('🚨 [stopRecording] Error:', error);
+      console.error('Error in transcription and sending messages:', error);
     }
   };
 
@@ -306,15 +392,15 @@ export function ConsolePage() {
         });
 
         setPendingMemories(prev => {
+          // Clean up old memories using our utility function
+          const cleanedMemories = cleanupMemories(prev);
+
           // Find any pending assistant responses waiting for a transcription
-          const pendingAssistantEntry = Object.entries(prev).find(([_, memory]) => 
+          const pendingAssistantEntry = Object.entries(cleanedMemories).find(([_, memory]) => 
             memory.assistantResponse && !memory.userMessage
           );
 
-          const newMemories = { ...prev };
-          
           if (pendingAssistantEntry) {
-            // We found a waiting assistant response, associate this transcription with it
             const [assistantKey, memory] = pendingAssistantEntry;
             console.log('🔗 [Transcription] Found pending assistant response, linking:', {
               transcriptionId: event.item_id,
@@ -327,20 +413,23 @@ export function ConsolePage() {
             processedItemsRef.current.add(memoryKey);
             
             // Remove the pending memory
-            const { [assistantKey]: _, ...rest } = newMemories;
+            const { [assistantKey]: _, ...rest } = cleanedMemories;
             return rest;
           } else {
-            // No assistant response waiting, store the transcription
+            // No assistant response waiting, store the transcription with timestamp
             console.log('⏳ [Transcription] No pending assistant response, storing transcription:', {
               transcriptionId: event.item_id,
               transcript: event.transcript
             });
             
-            newMemories[event.item_id] = {
-              userMessage: event.transcript,
-              transcriptionId: event.item_id
+            return {
+              ...cleanedMemories,
+              [event.item_id]: {
+                userMessage: event.transcript,
+                transcriptionId: event.item_id,
+                timestamp: Date.now()
+              }
             };
-            return newMemories;
           }
         });
       }
@@ -454,10 +543,11 @@ export function ConsolePage() {
               hasUserMessage: !!prev[previousItem.id]?.userMessage
             });
 
-            const newMemories = { ...prev };
+            // Clean up old memories using our utility function
+            const cleanedMemories = cleanupMemories(prev);
             
             // Check if we have a transcription waiting to be paired
-            const existingTranscription = Object.entries(prev).find(
+            const existingTranscription = Object.entries(cleanedMemories).find(
               ([key, memory]) => key !== previousItem.id && memory.userMessage && !memory.assistantResponse
             );
 
@@ -471,46 +561,20 @@ export function ConsolePage() {
                 });
                 storeConversationMemory(memory.userMessage!, assistantResponse);
                 processedItemsRef.current.add(memoryKey);
-                const { [transcriptionKey]: _, ...rest } = prev;
+                const { [transcriptionKey]: _, ...rest } = cleanedMemories;
                 return rest;
               }
             }
 
-            // Store assistant response and wait for transcription
-            newMemories[previousItem.id] = {
-              ...newMemories[previousItem.id],
-              assistantResponse
+            // Store assistant response with timestamp
+            return {
+              ...cleanedMemories,
+              [previousItem.id]: {
+                ...cleanedMemories[previousItem.id],
+                assistantResponse,
+                timestamp: Date.now()
+              }
             };
-
-            const userMessage = newMemories[previousItem.id]?.userMessage;
-            
-            if (userMessage) {
-              if (processedItemsRef.current.has(memoryKey)) {
-                console.log('⚠️ [Update] Already processed this memory:', previousItem.id);
-                return prev;
-              }
-
-              if (userMessage === VOICE_INSTRUCT) {
-                console.log('🔄 [Update] VOICE_INSTRUCT detected, waiting for actual transcription');
-                return newMemories;
-              }
-
-              console.log(`💾 [Update ${eventTime}] Storing complete memory:`, {
-                previousItemId: previousItem.id,
-                userMessage,
-                assistantResponse
-              });
-              storeConversationMemory(userMessage, assistantResponse);
-              processedItemsRef.current.add(memoryKey);
-              const { [previousItem.id]: _, ...rest } = newMemories;
-              return rest;
-            }
-            
-            console.log(`⏳ [Update ${eventTime}] Waiting for user transcript:`, {
-              previousItemId: previousItem.id,
-              assistantResponse
-            });
-            return newMemories;
           });
         }
       }
