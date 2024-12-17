@@ -133,11 +133,9 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         
         # Get query embedding
         query_embedding = self.create_embedding(query)
-        print(f"Generated query embedding of length: {len(query_embedding)}")
         
         # Calculate similarity scores for all memories
         memory_scores: List[Tuple[Memory, float]] = []
-        print(f"Calculating similarity scores for {len(self.memories)} memories")
         
         for memory in self.memories.values():
             if not memory.vector or len(memory.vector) == 0:
@@ -150,16 +148,15 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
                 
             similarity = self.embedder.cosine_similarity(query_embedding, memory.vector)
             memory_scores.append((memory, similarity))
-            print(f"Memory: {memory.content[:100]}... (similarity: {similarity:.4f})")
         
-        # Sort by similarity score and return top k, handling case where we have fewer memories than top_k
+        # Sort by similarity score and return top k
         memory_scores.sort(key=lambda x: x[1], reverse=True)
         actual_k = min(top_k, len(memory_scores))
         top_memories = memory_scores[:actual_k]
         
-        print(f"\nReturning top {len(top_memories)} memories (requested {top_k}):")
+        print(f"\nFound {len(top_memories)} similar memories:")
         for memory, score in top_memories:
-            print(f"- Score {score:.4f}: {memory.content[:100]}...")
+            print(f"Memory: {memory.content[:100]}... (similarity: {score:.4f})")
         
         return top_memories
 

@@ -44,6 +44,13 @@ interface PendingMemories {
   [key: string]: PendingMemory;
 }
 
+
+const BREAKER_PHRASE = `You are reacting to a question. Return ONLY ONE brief, a phrase that simulates a moment of human thought or reaction.
+                Choose from these categories and return ONLY ONE phrase from a category:
+                Contemplative (e.g. "Hmm, let me think about that...", "That's an interesting point...", "I wonder..."),
+                Physical Action (e.g. "Leans forward intently", "Taps chin thoughtfully", "Nods slowly"),
+                Sarcastic/Playful (e.g. "Oh, is that so?", "Well well well...", "Here we go again...")`
+
 const MEMORY_TIMEOUT = 15000; // 15 seconds timeout for pending memories
 
 const cleanupMemories = (memories: PendingMemories): PendingMemories => {
@@ -227,7 +234,7 @@ export function ConsolePage() {
             await client.sendUserMessageContent([
               {
                 type: 'input_text',
-                text: "Make a brief thinking or acknowledgment sound like 'hmm', 'uhh', 'let me see', 'ah', 'oh', 'one moment', 'I see', 'right', or 'okay'. Keep it very brief and natural sounding. Nothing more. Connect a few of these sounds together."
+                text: BREAKER_PHRASE
               }
             ]);
             filterMessageSent = true;
@@ -262,9 +269,16 @@ export function ConsolePage() {
             memoryPart = `. These are relevant memories: ${localTranscription.search_results.trim()}`;
           }
 
-          const updatedInstruct = `This is the question being asked: ${cleanedText}${memoryPart} ${VOICE_INSTRUCT}`;
+          const updatedInstruct = 'This is the question that is being asked: ' + cleanedText + " " + VOICE_INSTRUCT;
           console.log('🎤 [INCOMING] NEW APPENDED TEXT:', updatedInstruct);
-    
+          
+
+
+          await client.updateSession({
+            instructions: instructions + memoryPart
+          });
+
+          console.log('🎤 [SYSTEM UPDATE] NEW APPENDED TEXT:', instructions + memoryPart);
           // Now finalize the user turn by sending input_audio
           await client.sendUserMessageContent([
             {
@@ -277,7 +291,7 @@ export function ConsolePage() {
           await client.sendUserMessageContent([
             {
               type: 'input_text', 
-              text: updatedInstruct
+              text:  updatedInstruct
             }
           ]);
 
@@ -368,6 +382,8 @@ export function ConsolePage() {
     console.log('🔄 [Effect] Setting up event handlers');
 
     // Set up event handlers
+    let isBreaker = false; // Move isBreaker outside to maintain state between events
+    
     client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
       console.log('📢 [Event] Realtime event:', realtimeEvent.event.type);
       setRealtimeEvents((prev) => {
@@ -379,16 +395,36 @@ export function ConsolePage() {
         return prev.concat(realtimeEvent);
       });
 
+      // First check if this is a BREAKER_PHRASE
+      if (realtimeEvent.event.type === 'conversation.item.create') {
+        const content = realtimeEvent.event.item?.content?.[0]?.text;
+        if (content === BREAKER_PHRASE) {
+          console.log('🔍 [BREAKER_PHRASE] Detected, marking for skip');
+          isBreaker = true;
+          return; // Exit early as this is just the breaker phrase
+        }
+      }
+
       // Handle transcription in the realtime event handler
-      if (realtimeEvent.event.type === 'conversation.item.input_audio_transcription.completed') {
+      if (realtimeEvent.event.type === 'conversation.item.input_audio_transcription.completed' || 
+          (realtimeEvent.event.type === 'conversation.item.create' && 
+           realtimeEvent.event.item?.content?.[0]?.text !== 'updatedInstruct' &&
+           realtimeEvent.event.item?.content?.[0]?.text !== BREAKER_PHRASE)) {
+        
         const event = realtimeEvent.event;
         const memoryKey = `transcript_${event.item_id}`;
+        const transcript = event.type === 'conversation.item.input_audio_transcription.completed' 
+          ? event.transcript
+          : event.item?.content?.[0]?.text || '';
+
+        // Check if BREAKER_PHRASE is detected
         
-        console.log('🎤 [Transcription] Event received in realtime handler:', {
+        console.log('🎤 [USER Input DETECTED] Event received in realtime handler:', {
           type: event.type,
           item_id: event.item_id,
-          transcript: event.transcript,
-          pendingMemories
+          input: transcript,
+          pendingMemories,
+          isBreaker
         });
 
         setPendingMemories(prev => {
@@ -402,31 +438,93 @@ export function ConsolePage() {
 
           if (pendingAssistantEntry) {
             const [assistantKey, memory] = pendingAssistantEntry;
-            console.log('🔗 [Transcription] Found pending assistant response, linking:', {
-              transcriptionId: event.item_id,
+            console.log('🔗 [USER Input DETECTED and ASSISTANT RESPONSE PENDING IN LOG] Found pending assistant response, linking:', {
+              inputId: event.item_id,
               assistantKey,
-              transcript: event.transcript
+              input: transcript
             });
             
             // Store the complete memory
-            storeConversationMemory(event.transcript, memory.assistantResponse!);
+            storeConversationMemory(transcript, memory.assistantResponse!);
             processedItemsRef.current.add(memoryKey);
             
             // Remove the pending memory
             const { [assistantKey]: _, ...rest } = cleanedMemories;
             return rest;
           } else {
-            // No assistant response waiting, store the transcription with timestamp
-            console.log('⏳ [Transcription] No pending assistant response, storing transcription:', {
-              transcriptionId: event.item_id,
+            // No assistant response waiting, store the input with timestamp
+            console.log('⏳ [USER Input DETECTED] No pending assistant response, storing input:', {
+              inputId: event.item_id,
+              input: transcript
+            });
+            
+            return {
+              ...cleanedMemories,
+              [event.item_id]: {
+                userMessage: transcript,
+                transcriptionId: event.item_id,
+                timestamp: Date.now()
+              }
+            };
+          }
+        });
+      }
+
+      // Add handler for assistant audio transcript completion
+
+      
+      if (realtimeEvent.event.type === 'response.audio_transcript.done') {
+        const event = realtimeEvent.event;
+        const memoryKey = `transcript_${event.item_id}`;
+        
+        if (isBreaker) {
+          console.log('⏭️ [BREAKER_PHRASE] Skipping memory storage for breaker response');
+          isBreaker = false; // Reset the flag after skipping
+          return;
+        }
+        
+        console.log('🎙️ [Assistant Transcription DETECTED] Event received:', {
+          type: event.type,
+          item_id: event.item_id,
+          transcript: event.transcript,
+          pendingMemories
+        });
+
+        setPendingMemories(prev => {
+          // Clean up old memories
+          const cleanedMemories = cleanupMemories(prev);
+
+          // Find any pending user messages waiting for an assistant response
+          const pendingUserEntry = Object.entries(cleanedMemories).find(([_, memory]) => 
+            memory.userMessage && !memory.assistantResponse
+          );
+
+          if (pendingUserEntry) {
+            const [userKey, memory] = pendingUserEntry;
+            console.log('🔗 [Assistant Transcription] Found pending user message, linking:', {
+              assistantId: event.item_id,
+              userKey,
+              transcript: event.transcript
+            });
+            
+            // Store the complete memory
+            storeConversationMemory(memory.userMessage!, event.transcript);
+            processedItemsRef.current.add(memoryKey);
+            
+            // Remove the pending memory
+            const { [userKey]: _, ...rest } = cleanedMemories;
+            return rest;
+          } else {
+            // No user message waiting, store the assistant response with timestamp
+            console.log('⏳ [Assistant Transcription] No pending user message, storing response:', {
+              assistantId: event.item_id,
               transcript: event.transcript
             });
             
             return {
               ...cleanedMemories,
               [event.item_id]: {
-                userMessage: event.transcript,
-                transcriptionId: event.item_id,
+                assistantResponse: event.transcript,
                 timestamp: Date.now()
               }
             };
@@ -456,126 +554,6 @@ export function ConsolePage() {
         if (item.formatted.audio?.length) {
           const wavFile = await AudioHandler.decodeAudio(item.formatted.audio);
           item.formatted.file = wavFile;
-        }
-        
-        // Handle completed assistant response
-        if (item.role === 'assistant' && items.length >= 2) {
-          const previousItem = items[items.length - 2];
-          const memoryKey = `transcript_${previousItem.id}`;
-
-          console.log(`👥 [Update ${eventTime}] Processing assistant response:`, {
-            assistantId: item.id,
-            previousItemId: previousItem.id,
-            previousItemRole: previousItem.role,
-            pendingMemories
-          });
-
-          const assistantResponse = item.content?.find((c: any) => c.type === 'audio')?.transcript || '';
-          
-          if (!assistantResponse) {
-            console.log(`❌ [Update ${eventTime}] No assistant transcript found for:`, item.id);
-            return;
-          }
-
-          // For text input, check for VOICE_INSTRUCT and handle appropriately
-          if (previousItem.content?.find((c: any) => c.type === 'input_text')) {
-            const userMessage = previousItem.content.find((c: any) => c.type === 'input_text')?.text || '';
-            
-            // If the message is VOICE_INSTRUCT, look for a transcription
-            if (userMessage === VOICE_INSTRUCT) {
-              console.log(`🔄 [Update ${eventTime}] VOICE_INSTRUCT detected, checking for transcription:`, {
-                previousItemId: previousItem.id,
-                pendingMemories
-              });
-              
-              // Find any pending transcription without an assistant response
-              const pendingTranscription = Object.entries(pendingMemories).find(([_, memory]) => 
-                memory.userMessage && !memory.assistantResponse
-              );
-
-              if (pendingTranscription) {
-                const [transcriptionKey, memory] = pendingTranscription;
-                console.log(`🎯 [Update ${eventTime}] Found pending transcription, storing memory:`, {
-                  transcriptionKey,
-                  userMessage: memory.userMessage,
-                  assistantResponse
-                });
-                
-                storeConversationMemory(memory.userMessage!, assistantResponse);
-                processedItemsRef.current.add(memoryKey);
-                setPendingMemories(prev => {
-                  const { [transcriptionKey]: _, ...rest } = prev;
-                  return rest;
-                });
-              } else {
-                console.log(`⏳ [Update ${eventTime}] No transcription yet, storing assistant response:`, {
-                  previousItemId: previousItem.id,
-                  assistantResponse
-                });
-                setPendingMemories(prev => ({
-                  ...prev,
-                  [previousItem.id]: {
-                    assistantResponse,
-                    voiceInstructId: previousItem.id
-                  }
-                }));
-              }
-              return;
-            }
-
-            if (userMessage && !processedItemsRef.current.has(memoryKey)) {
-              console.log(`💾 [Update ${eventTime}] Storing text input memory:`, {
-                previousItemId: previousItem.id,
-                userMessage,
-                assistantResponse
-              });
-              await storeConversationMemory(userMessage, assistantResponse);
-              processedItemsRef.current.add(memoryKey);
-            }
-            return;
-          }
-
-          // For audio input, store in pending memories and check for existing transcription
-          setPendingMemories(prev => {
-            console.log(`📝 [Update ${eventTime}] State before assistant update:`, {
-              pendingMemories: prev,
-              previousItemId: previousItem.id,
-              hasUserMessage: !!prev[previousItem.id]?.userMessage
-            });
-
-            // Clean up old memories using our utility function
-            const cleanedMemories = cleanupMemories(prev);
-            
-            // Check if we have a transcription waiting to be paired
-            const existingTranscription = Object.entries(cleanedMemories).find(
-              ([key, memory]) => key !== previousItem.id && memory.userMessage && !memory.assistantResponse
-            );
-
-            if (existingTranscription) {
-              const [transcriptionKey, memory] = existingTranscription;
-              if (memory.userMessage !== VOICE_INSTRUCT) {
-                console.log(`🎯 [Update ${eventTime}] Found waiting transcription, storing memory:`, {
-                  transcriptionKey,
-                  userMessage: memory.userMessage,
-                  assistantResponse
-                });
-                storeConversationMemory(memory.userMessage!, assistantResponse);
-                processedItemsRef.current.add(memoryKey);
-                const { [transcriptionKey]: _, ...rest } = cleanedMemories;
-                return rest;
-              }
-            }
-
-            // Store assistant response with timestamp
-            return {
-              ...cleanedMemories,
-              [previousItem.id]: {
-                ...cleanedMemories[previousItem.id],
-                assistantResponse,
-                timestamp: Date.now()
-              }
-            };
-          });
         }
       }
 
