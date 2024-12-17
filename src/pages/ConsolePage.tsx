@@ -445,7 +445,8 @@ export function ConsolePage() {
             });
             
             // Store the complete memory
-            storeConversationMemory(transcript, memory.assistantResponse!);
+            
+            storeConversationMemory(transcript.replace(VOICE_INSTRUCT, ''), memory.assistantResponse!);
             processedItemsRef.current.add(memoryKey);
             
             // Remove the pending memory
@@ -508,7 +509,7 @@ export function ConsolePage() {
             });
             
             // Store the complete memory
-            storeConversationMemory(memory.userMessage!, event.transcript);
+            storeConversationMemory(memory.userMessage!.replace(VOICE_INSTRUCT, ''), event.transcript);
             processedItemsRef.current.add(memoryKey);
             
             // Remove the pending memory
