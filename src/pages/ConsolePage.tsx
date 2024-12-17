@@ -619,8 +619,8 @@ export function ConsolePage() {
     <div data-component="ConsolePage">
       <div className="content-top">
         <div className="content-title">
-          <img src="/openai-logomark.svg" alt="OpenAI Logo" />
-          <span>realtime console</span>
+          <img src="/logo.svg" alt="Fucken Broken Bro" />
+          <span>workbench который мы заслужили</span>
         </div>
         <div className="content-api-key">
           {!LOCAL_RELAY_SERVER_URL && (

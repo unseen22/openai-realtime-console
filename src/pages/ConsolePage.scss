@@ -8,6 +8,8 @@
   flex-direction: column;
   overflow: hidden;
   margin: 0px 8px;
+  background-color: #1e1e2e;
+  color: #cdd6f4;
   & > div {
     flex-shrink: 0;
   }
@@ -53,7 +55,7 @@
         position: relative;
       }
       .content-block-body {
-        color: #6e6e7f;
+        color: #a6adc8;
         position: relative;
         flex-grow: 1;
         padding: 8px 0px;
@@ -87,12 +89,14 @@
           top: 16px;
           left: 16px;
           padding: 4px 16px;
-          background-color: #fff;
+          background-color: #313244;
           border-radius: 1000px;
           min-height: 32px;
           z-index: 9999;
           text-align: center;
           white-space: pre;
+          color: #cdd6f4;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
           &.bottom {
             top: auto;
             bottom: 16px;
@@ -104,7 +108,8 @@
         height: 250px;
         max-height: 250px;
         white-space: pre;
-        background-color: #ececf1;
+        background-color: #313244;
+        border: 1px solid #45475a;
         .content-block-body {
           padding: 16px;
           margin-top: 56px;
@@ -117,31 +122,53 @@
       flex-direction: column;
       overflow: hidden;
       & > div {
+        flex-grow: 0;
+      }
+      & > div.events {
+        overflow: hidden;
+        height: 200px;
+        min-height: 200px;
+        max-height: 200px;
+        flex-grow: 0;
+        flex-shrink: 0;
+      }
+      .conversation {
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        width: 100%;
+        overflow-y: auto;
+        height: calc(100% - 200px - 68px);
+        min-height: 0;
+        max-height: none;
+        border-top: 1px solid #45475a;
         flex-grow: 1;
+        padding: 16px;
       }
       & > .content-actions {
+        height: 68px;
         flex-grow: 0;
         flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 16px;
-      }
-      & > div.events {
-        overflow: hidden;
-      }
-      .events {
-        border-top: 1px solid #e7e7e7;
-      }
-      .conversation {
-        display: flex;
-        flex-shrink: 0;
-        width: 100%;
-        overflow: hidden;
-        height: 200px;
-        min-height: 0;
-        max-height: 200px;
-        border-top: 1px solid #e7e7e7;
+        padding: 16px 0;
+        background-color: #1e1e2e;
+        position: sticky;
+        bottom: 0;
+        z-index: 10;
+        button, .switch {
+          background-color: #313244;
+          color: #cdd6f4;
+          border: 1px solid #45475a;
+          &:hover {
+            background-color: #45475a;
+          }
+          &:active {
+            background-color: #585b70;
+          }
+        }
       }
     }
   }
@@ -158,14 +185,14 @@
       position: absolute;
       top: 0px;
       right: -20px;
-      background: #aaa;
-      color: #fff;
+      background: #45475a;
+      color: #cdd6f4;
       display: flex;
       border-radius: 16px;
       padding: 2px;
       cursor: pointer;
       &:hover {
-        background: #696969;
+        background: #585b70;
       }
       svg {
         stroke-width: 3;
@@ -181,17 +208,20 @@
       flex-shrink: 0;
       margin-right: 16px;
       &.user {
-        color: #0099ff;
+        color: #89b4fa;
       }
       &.assistant {
-        color: #009900;
+        color: #a6e3a1;
       }
     }
     .speaker-content {
-      color: #18181b;
+      color: #cdd6f4;
       overflow: hidden;
       word-wrap: break-word;
     }
+    width: 100%;
+    padding-right: 24px;
+    box-sizing: border-box;
   }
 
   .event {
@@ -211,14 +241,14 @@
     .event-details {
       display: flex;
       flex-direction: column;
-      color: #18181b;
+      color: #cdd6f4;
       gap: 8px;
       .event-summary {
         padding: 4px 8px;
         margin: 0px -8px;
         &:hover {
           border-radius: 8px;
-          background-color: #f0f0f0;
+          background-color: #313244;
         }
         cursor: pointer;
         display: flex;
@@ -230,13 +260,13 @@
           align-items: center;
           gap: 8px;
           &.client {
-            color: #0099ff;
+            color: #89b4fa;
           }
           &.server {
-            color: #009900;
+            color: #a6e3a1;
           }
           &.error {
-            color: #990000;
+            color: #f38ba8;
           }
           svg {
             stroke-width: 3;
@@ -257,6 +287,7 @@
     border-radius: 16px;
     z-index: 10;
     gap: 2px;
+    background-color: rgba(49, 50, 68, 0.8);
     .visualization-entry {
       position: relative;
       display: flex;
@@ -265,10 +296,10 @@
       width: 100px;
       gap: 4px;
       &.client {
-        color: #0099ff;
+        color: #89b4fa;
       }
       &.server {
-        color: #009900;
+        color: #a6e3a1;
       }
       canvas {
         width: 100%;
