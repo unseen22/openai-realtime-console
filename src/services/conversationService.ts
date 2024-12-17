@@ -90,7 +90,7 @@ export const transcribeLocal = async (audioData: Int16Array): Promise<Transcript
         // Take only the most recent meaningful memory
         cleanedSearchResults = parts[0] || '';
       }
-      
+      console.log('🎤 [QUESTION RETURNED] Cleaned search results:', data.text);
       return {
         text: data.text,
         search_results: cleanedSearchResults,

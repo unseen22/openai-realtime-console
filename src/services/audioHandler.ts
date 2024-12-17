@@ -30,6 +30,11 @@ export class AudioHandler {
   async stopRecording() {
     await this.wavRecorder.pause();
     const audioData = await this.wavRecorder.save();
+    
+    // Reset the recorder after saving
+    await this.wavRecorder.end();  // End current session
+    await this.wavRecorder.begin(); // Start fresh session
+    
     const arrayBuffer = await audioData.blob.arrayBuffer();
     return new Int16Array(arrayBuffer);
   }

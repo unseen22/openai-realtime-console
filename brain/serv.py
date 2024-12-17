@@ -375,13 +375,15 @@ async def transcribe_audio(audio_file: UploadFile = File(...)):
     """Transcribe audio using OpenAI Whisper API and search memories"""
     try:
         content = await audio_file.read()
+        print(f"[DEBUG AUDIO] Received audio file size: {len(content)} bytes")
+
         transcribed_text = await transcription_handler.transcribe_audio(content)
         
-        # Search memories using the transcribed text with explicit top_k
+        # Search memories using the transcribed text
         search_results = await search_memories(
             query=transcribed_text,
-            persona_id="pink_man",  # Or make this configurable
-            top_k=3  # Explicitly set to return only top 3 memories
+            persona_id="pink_man",
+            top_k=3
         )
         
         # Convert search results to concatenated string
@@ -394,6 +396,8 @@ async def transcribe_audio(audio_file: UploadFile = File(...)):
             "search_results": search_results_text, 
             "status": "success"
         }
+
+        print(f"Response Inside SERV: {transcribed_text}")
 
         # Clean up variables
         del content
