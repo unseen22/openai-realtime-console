@@ -3,21 +3,24 @@ import json
 import os
 from datetime import datetime
 
-from brain.memory import Memory, MemoryType
-from brain.database import Database
-from brain.embedder import Embedder
-from brain.groq_tool import GroqTool
+from memory import Memory, MemoryType
+from database import Database
+from embedder import Embedder
+from groq_tool import GroqTool
 from pathlib import Path
 
 class Brain:
-    def __init__(self, persona_id: str, db_path: str = "memories.db"):
+    def __init__(self, persona_id: str, persona_name: str, persona_profile: str, db_path: str = "memories.db"):
         self.persona_id = persona_id
+        self.persona_name = persona_name
+        self.persona_profile = persona_profile
         self.db = Database(db_path)
         self.mood: str = 'neutral'
         self.status: str = 'active'
         self.memories: Dict[str, Memory] = {}
         self.embedder = Embedder()
         self._load_memories()
+        self.plans = []  # List of strings representing planned actions
 
     def _load_memories(self):
         """Load memories for the current persona from database"""
@@ -78,15 +81,19 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
                 return True
         return False
 
-    def create_memory(self, content: str, memory_type: MemoryType = MemoryType.CONVERSATION) -> Optional[Memory]:
+    def create_memory(self, content: str | dict, memory_type: MemoryType = MemoryType.CONVERSATION) -> Optional[Memory]:
         """Create a new memory with the given content if it doesn't already exist"""
-        print(f"\nCreating new memory: {content[:100]}...")
+        print(f"\nCreating new memory: {content}...")
+        
+        # Convert dictionary content to string if necessary
+        if isinstance(content, dict):
+            content = json.dumps(content)
         
         # Check for duplicate content
         if self.has_duplicate_content(content):
             print("Duplicate content found, skipping")
             return None
-            
+        
         # Create embedding for the content
         vector = self.create_embedding(content)
         print(f"Generated embedding vector of length: {len(vector)}")
@@ -242,3 +249,79 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
     def get_status(self) -> str:
         """Get the current status"""
         return self.status
+    
+    def _add_to_plans(self, new_plans: list[str]) -> dict:
+        """Add new plans from reflection to existing plans and organize them by time.
+        
+        Args:
+            new_plans: List of new plans to add
+            
+        Returns:
+            dict: Status of the operation with organized plans
+        """
+        try:
+            groq = GroqTool()
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            # Convert any old format plans (strings) to new format (dicts)
+            current_plans = []
+            for plan in self.plans:
+                if isinstance(plan, str):
+                    # Convert old string format to new dict format
+                    current_plans.append({
+                        "plan": plan,
+                        "start_date": today,  # Default to today for old plans
+                        "priority": "medium"  # Default priority
+                    })
+                else:
+                    current_plans.append(plan)
+            
+            # Create prompt to organize plans by time through persona's perspective
+            prompt = f"""Given this persona's profile:
+            {self.persona_profile}
+            
+            And today's date {today}, organize these new plans by when they should be done, considering the persona's preferences, goals and current plans:
+
+            Current plans: {current_plans}
+            New plans to organize: {new_plans}
+            
+            For each new plan, determine:
+            1. When it should start (date in YYYY-MM-DD format) based on the persona's schedule and priorities
+            2. Priority level (high/medium/low) based on alignment with persona's goals
+            
+            Return a JSON array of objects with fields:
+            - plan: The plan text
+            - start_date: Start date
+            - priority: Priority level
+            
+            Only return the JSON array."""
+
+            # Get organized new plans from Groq
+            response = groq.generate_text(prompt, temperature=0.7)
+            organized_new_plans = json.loads(response)
+            
+            # Add organized new plans while avoiding duplicates
+            for plan_obj in organized_new_plans:
+                plan_text = plan_obj["plan"]
+                # Only add if plan text doesn't already exist
+                if not any(
+                    (isinstance(existing_plan, dict) and existing_plan.get("plan") == plan_text) or
+                    (isinstance(existing_plan, str) and existing_plan == plan_text)
+                    for existing_plan in current_plans
+                ):
+                    current_plans.append(plan_obj)
+            
+            # Update self.plans with the merged list
+            self.plans = current_plans
+            
+            return {
+                "success": True,
+                "message": f"Added and organized {len(new_plans)} new plans",
+                "plans": self.plans
+            }
+            
+        except Exception as e:
+            return {
+                "success": False, 
+                "error": str(e)
+            }

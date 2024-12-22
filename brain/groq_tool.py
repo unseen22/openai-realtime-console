@@ -15,7 +15,7 @@ class GroqTool:
             "Gemma 7B": "gemma-7b-it",
             "LLaMA3 Groq 8B (Tool Use)": "llama3-groq-8b-8192-tool-use-preview",
             "LLaMA 3.1 70B Versatile": "llama-3.1-70b-versatile",
-            "LLaMA 3.1 8B Instant": "llama-3.1-8b-instant",
+            "LLaMA 3.1 8B Instant": "llama-3.3-70b-versatile",
             "LLaMA 3.2 1B": "llama-3.2-1b-preview",
             "LLaMA 3.2 3B": "llama-3.2-3b-preview",
             "LLaMA 3.2 11B Vision": "llama-3.2-11b-vision-preview",
@@ -26,9 +26,8 @@ class GroqTool:
 
     def _get_api_key(self) -> str:
         """Get API key from environment variable"""
-        api_key = "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"
-        #"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"
-        #"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"
+        api_key = "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"#"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"#"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"#"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"#  #"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"
+        
         if not api_key:
             raise ValueError("GROQ_API_KEY environment variable not set")
         return api_key
@@ -36,7 +35,7 @@ class GroqTool:
     def chat_completion(
         self,
         messages: list,
-        model: str = "llama-3.3-70b-specdec",
+        model: str = "llama-3.3-70b-versatile",
         temperature: float = 0.1,
         max_tokens: int = 1024,
         stream: bool = False,

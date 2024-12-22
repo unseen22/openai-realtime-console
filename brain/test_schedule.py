@@ -1,4 +1,20 @@
-Hanna's Action-Oriented Personality Profile
+import json
+import os
+from brain import Brain
+from memory import MemoryType
+from persona_scheduler import PersonaScheduler
+from persona_execute_schedule import PersonaExecuteSchedule
+from persona_reflection import PersonaReflection
+import streamlit as st
+import sqlite3
+import pandas as pd
+from contextlib import contextmanager
+
+
+
+persona = {
+    "name": "Hanna",
+    "profile_prompt": """Hanna's Action-Oriented Personality Profile
 
 I. Core Motivations & Values:
 
@@ -104,4 +120,100 @@ Emotion: Openly reactive, but would try to hide more complex emotions.
 
 Social: Highly social, but has no issue being alone.
 
-Style: Bold, Vibrant and high energy, but can find comfort in chill things.
+Style: Bold, Vibrant and high energy, but can find comfort in chill things.""",
+    "recent_history": {}
+}
+
+
+# Initialize brain for test persona
+# Try to load existing brain state from file
+brain_state_file = "hanna_brain_state.json"
+if os.path.exists(brain_state_file):
+    with open(brain_state_file, 'r') as f:
+        saved_state = json.load(f)
+    persona_brain = Brain(
+        persona_id="hanna",
+        persona_name=persona["name"], 
+        persona_profile=persona["profile_prompt"],
+        db_path="test_memories.db"
+    )
+    persona_brain.mood = saved_state.get('mood', 'neutral')
+    persona_brain.status = saved_state.get('status', 'active')
+    persona_brain.plans = saved_state.get('plans', [])
+else:
+    # Create new brain if no saved state exists
+    persona_brain = Brain(
+        persona_id="hanna",
+        persona_name=persona["name"],
+        persona_profile=persona["profile_prompt"],
+        db_path="test_memories.db"
+    )
+
+# Save brain state after initialization
+with open(brain_state_file, 'w') as f:
+    json.dump({
+        'mood': persona_brain.mood,
+        'status': persona_brain.status,
+        'plans': persona_brain.plans
+    }, f)
+
+reflection_instance = PersonaReflection()
+execute_schedule = PersonaExecuteSchedule()
+
+# Get and execute the schedule
+schedule_result = execute_schedule.get_schedule(persona_brain)
+
+
+# Only proceed with reflection if schedule was successful
+reflection_result = reflection_instance.reflect_on_day(persona_brain, schedule_result.get("results", []))
+persona_brain.create_memory(reflection_result, MemoryType.REFLECTION)
+
+persona_brain._add_to_plans(reflection_result["plans"])
+
+
+# Save updated brain state after reflection and plan updates
+with open(brain_state_file, 'w') as f:
+    json.dump({
+        'mood': persona_brain.mood,
+        'status': persona_brain.status, 
+        'plans': persona_brain.plans
+    }, f)
+
+
+
+print(f"❗️❗️❗️ this is the reflection result: {reflection_result} ❗️❗️❗️")
+print(f"✅ Schedule executed successfully: {schedule_result['results']}")
+
+
+
+
+# Create a context manager for database connections
+@contextmanager
+def get_connection():
+    conn = sqlite3.connect("test_memories.db")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+# Modify the Streamlit section
+st.title("Memory Browser")
+
+# Query memories using the context manager
+with get_connection() as conn:
+    memories_df = pd.read_sql_query("""
+        SELECT timestamp, memory_type, content, importance 
+        FROM memories
+        ORDER BY timestamp DESC
+    """, conn)
+
+# Display memories
+st.header("Stored Memories")
+st.dataframe(memories_df)
+
+# Display plans
+st.header("Current Plans") 
+if 'persona_brain' in locals():
+    st.write(persona_brain.plans)
+else:
+    st.write("No plans available - run the scheduler first")

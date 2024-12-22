@@ -24,6 +24,9 @@ class Embedder:
         """
         if isinstance(texts, str):
             texts = [texts]
+        elif isinstance(texts, dict):
+            # If input is a dictionary, convert it to a string representation
+            texts = [json.dumps(texts)]
 
         try:
             payload = {

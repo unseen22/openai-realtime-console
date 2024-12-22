@@ -1,13 +1,14 @@
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
-from .embedder import Embedder
+from embedder import Embedder
 
 class MemoryType(Enum):
     CONVERSATION = "conversation"
     EXPERIENCE = "experience"
     PROFILE = "profile"
     SYSTEM = "system"
+    REFLECTION = "reflection"
 
 class Memory:
     _embedder = Embedder()

@@ -1,4 +1,5 @@
 import json
+from memory import MemoryType
 from groq_tool import GroqTool
 from perplexity_tool import PerplexityHandler
 
@@ -7,18 +8,86 @@ class PersonaScheduler:
         self.groq = GroqTool()
         self.perplexity = PerplexityHandler(api_key="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")
 
-    def create_daily_schedule(self, persona_profile, recent_history):
-        groq_prompt = f"""
-        Generate a daily schedule for a persona, take into account the persona's profile and recent history.
-        Persona Profile: {persona_profile}
-        Recent History: {recent_history}
 
+    def get_plans(self, persona):
+        """Evaluate and prioritize plans for the persona based on their profile.
+        
+        Args:
+            persona: The Brain object containing persona information
+            
+        Returns:
+            dict: Prioritized plans and activities for today
+        """
+        try:
+            plans = persona.plans
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to get plans: {str(e)}"
+            }
+
+        if not plans:
+            return {
+                "success": False,
+                "error": "No plans found for persona"
+            }
+        
+        # Create prompt to evaluate plans
+        plans_prompt = f"""Given this persona's profile:
+        {persona.persona_profile}
+
+        And these current plans:
+        {plans}
+
+        And these recent history:
+        {[memory for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}
+
+        Please evaluate which plans are most important to prioritize today. Consider:
+        1. Urgency and time-sensitivity
+        2. Alignment with persona's goals and values
+        3. Current emotional state and energy level
+        4. Recent activities and progress
+
+        Return a JSON object with:
+        1. Top 3 prioritized plans for today
+        2. Brief explanation for each priority
+        """
+
+        try:
+            # Get plan priorities from LLM
+            response = self.groq.generate_text(plans_prompt, temperature=0.1)
+            priorities = json.loads(response)
+            
+            return {
+                "success": True,
+                "priorities": priorities
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def create_daily_schedule(self, persona):
+
+        # TODO: Add the plans to the prompt
+        get_plans = self.get_plans(persona.plans)
+        if not get_plans["success"]:
+            get_plans = []
+        
+        groq_prompt = f"""
+        Generate a daily schedule for a persona, take into account the persona's profile and recent history and the plans to do today.
+        Persona Profile: {persona.persona_profile}
+        Recent History: {[memory for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}
+        Plans to do: {get_plans}
+        Always add to schedule only 1 activity per time slot.
 
         Return only the JSON object with the schedule.
         Example:
         {{
             "schedule": [
-                {{"time": "06:00", "activity": "Wake up and meditate"}},
+                {{"time": "06:00", "activity": "Wake up"}},
                 {{"time": "07:00", "activity": "Exercise"}},
                 {{"time": "08:00", "activity": "Breakfast"}},
                 {{"time": "09:00", "activity": "Work"}},
@@ -31,7 +100,7 @@ class PersonaScheduler:
         try:
             response = self.groq.chat_completion(
                 messages=[{"role": "user", "content": groq_prompt}],
-                model="llama-3.3-70b-specdec",
+                model="llama-3.3-70b-versatile",
                 temperature=0.1,
                 max_tokens=1024,
                 response_format={"type": "json_object"}
@@ -58,8 +127,7 @@ class PersonaScheduler:
         Returns:
             dict: JSON object containing schedule and daily activities
         """
-        self.persona = persona
-        
+           
 
 
 
@@ -67,14 +135,10 @@ class PersonaScheduler:
 
         try:
             # Generate schedule using persona profile
-            schedule_raw = self.create_daily_schedule(
-                persona_profile=persona,
-                recent_history={}
-            )
+            schedule = self.create_daily_schedule(persona)
             
-            # Check and adjust schedule times and activities
-            #schedule = self.validate_schedule_times(schedule_raw)
-            schedule = self.modernize_activities(schedule_raw)
+            # Modernize the activities
+            schedule = self.modernize_activities(schedule, persona)
             
             return {
                 "success": True,
@@ -92,7 +156,7 @@ class PersonaScheduler:
         # Check and adjust schedule times and activities
         return schedule
 
-    def modernize_activities(self, schedule):
+    def modernize_activities(self, schedule, persona):
         # Analyze each activity and find modern alternatives
         if "schedule" in schedule and isinstance(schedule["schedule"], list):
             # Convert schedule to string representation
@@ -101,8 +165,6 @@ class PersonaScheduler:
             modern_activity_prompt = f"""
             Given this full schedule:
             {schedule_str}
-            
-            And this persons profile: {self.persona['profile_prompt']}
             
             For each activity, suggest a modern alternative that:
             1. Matches the persona's interests and personality
@@ -134,7 +196,7 @@ class PersonaScheduler:
             {schedule_str}
             
             And this persona profile:
-            {self.persona['profile_prompt']}
+            {persona.persona_profile}
 
             Change the shedule according to this feedback:
             {modern_suggestions}
@@ -148,7 +210,7 @@ class PersonaScheduler:
             try:
                 schedule = self.groq.chat_completion(
                     messages=[{"role": "user", "content": groq_prompt}],
-                    model="llama-3.3-70b-specdec", 
+                    model="llama-3.3-70b-versatile", 
                     temperature=0.1,
                     max_tokens=1024,
                     response_format={"type": "json_object"}
