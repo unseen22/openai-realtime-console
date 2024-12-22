@@ -20,7 +20,7 @@ import { Button } from '../components/button/Button';
 import { Toggle } from '../components/toggle/Toggle';
 import { instructions } from '../utils/conversation_config.js';
 import { WavRenderer } from '../utils/wav_renderer';
-import { createRealtimeClient, setupClientTools } from '../services/realtimeClient';
+import { createRealtimeClient, setupClientTools, sendOutOfBandResponse } from '../services/realtimeClient';
 import { AudioHandler } from '../services/audioHandler';
 import { EventLog } from '../components/EventLog';
 import { ConversationView } from '../components/ConversationView';
@@ -44,6 +44,14 @@ interface PendingMemories {
   [key: string]: PendingMemory;
 }
 
+// Add interface for out-of-band responses
+interface OutOfBandResponse {
+  type: string;
+  response: {
+    metadata?: any;
+    output?: string[];
+  };
+}
 
 const BREAKER_PHRASE = `You are reacting to a question. Return ONLY ONE brief, a phrase that simulates a moment of human thought or reaction.
                 Choose from these categories and return ONLY ONE phrase from a category:
@@ -81,6 +89,7 @@ export function ConsolePage() {
   });
   const [marker, setMarker] = useState<Coordinates | null>(null);
   const [voiceInstruct, setVoiceInstruct] = useState(VOICE_INSTRUCT);
+  const [outOfBandResponses, setOutOfBandResponses] = useState<{ [key: string]: string }>({});
 
   // Refs
   const clientCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -145,6 +154,17 @@ export function ConsolePage() {
     // Set up initial conversation and then update with memories
     await setupConversation(client);
     await updateSessionWithMemories(client);
+
+    // Example of sending an out-of-band response for conversation analysis
+    try {
+      await sendOutOfBandResponse(client, 
+        'Analyze the emotional tone of the conversation so far. Output a single word describing the primary emotion (e.g. "happy", "angry", "sad", "excited", "neutral", "frustrated", "confused"). Base this on both the user\'s messages and your responses.',
+        { topic: "classification" }
+      );
+      console.log('✅ [OUTBAND] Classification request sent successfully');
+    } catch (error) {
+      console.error('❌ [OUTBAND] Error sending classification request:', error);
+    }
 
     client.sendUserMessageContent([
       {
@@ -385,14 +405,11 @@ export function ConsolePage() {
     let isBreaker = false; // Move isBreaker outside to maintain state between events
     
     client.on('realtime.event', (realtimeEvent: RealtimeEvent) => {
-      console.log('📢 [Event] Realtime event:', realtimeEvent.event.type);
-      setRealtimeEvents((prev) => {
-        const lastEvent = prev[prev.length - 1];
-        if (lastEvent?.event.type === realtimeEvent.event.type) {
-          lastEvent.count = (lastEvent.count || 0) + 1;
-          return prev.slice(0, -1).concat(lastEvent);
-        }
-        return prev.concat(realtimeEvent);
+      console.log('📢 [Event] Realtime event:', {
+        type: realtimeEvent.event.type,
+        hasResponse: !!realtimeEvent.event.response,
+        isOutOfBand: realtimeEvent.event.response?.conversation === 'none',
+        metadata: realtimeEvent.event.response?.metadata
       });
 
       // First check if this is a BREAKER_PHRASE
@@ -531,6 +548,33 @@ export function ConsolePage() {
             };
           }
         });
+      }
+
+      // Handle out-of-band responses
+      if (realtimeEvent.event.type === 'response.done') {
+        const event = realtimeEvent.event;
+        
+        // Check if this is an out-of-band response with classification topic
+        if (event.response?.metadata?.topic === 'classification') {
+          console.log('🔍 [OUTBAND] Classification response received:', {
+            type: event.type,
+            metadata: event.response.metadata,
+            output: event.response.output?.[0]  // Access first item in output array
+          });
+          
+          // Get the response text from the output array
+          const responseText = event.response.output?.[0];
+          if (responseText) {
+            setOutOfBandResponses(prev => {
+              const newState = {
+                ...prev,
+                [event.response.metadata.topic]: responseText
+              };
+              console.log('💾 [OUTBAND] Updated responses state:', newState);
+              return newState;
+            });
+          }
+        }
       }
     });
 

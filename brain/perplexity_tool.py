@@ -1,5 +1,4 @@
 import requests
-import streamlit as st
 from typing import Optional
 
 class PerplexityHandler:

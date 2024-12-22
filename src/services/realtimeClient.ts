@@ -13,6 +13,66 @@ export const createRealtimeClient = (apiKey: string = '') => {
   );
 };
 
+export const sendOutOfBandResponse = async (client: RealtimeClient, prompt: string, metadata: any = {}) => {
+  console.log('🚀 [OUTBAND] Starting to send out-of-band response:', {
+    prompt,
+    metadata
+  });
+
+  // Create the event with the proper structure for out-of-band responses
+  const event = {
+    type: "response.create",
+    response: {
+      // Setting to "none" indicates the response is out of band
+      // and will not be added to the default conversation
+      conversation: "none",
+
+      // Set metadata to help identify responses sent back from the model
+      metadata,
+      
+      // Set any other available response fields
+      modalities: ["text"],
+      instructions: prompt,
+
+      // Create a custom input array for this request
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",  // Changed to match docs
+              text: prompt,
+            },
+          ],
+        },
+      ],
+    }
+  };
+
+  // Send the raw event through the client
+  // @ts-ignore - We know this exists even though it's not in the type definitions
+  if (client.realtime?.send) {
+    try {
+      // @ts-ignore - We know this exists even though it's not in the type definitions
+      client.realtime.send(event.type, event);
+      console.log('✅ [OUTBAND] Event sent successfully:', JSON.stringify(event, null, 2));
+    } catch (error) {
+      console.error('❌ [OUTBAND] Error sending event:', error);
+      throw error;
+    }
+  } else {
+    const error = 'Unable to send out-of-band response: realtime API not available';
+    console.error('❌ [OUTBAND]', error);
+    throw new Error(error);
+  }
+
+  // Log the client state
+  console.log('🔍 [OUTBAND] Client state:', {
+    isConnected: client.isConnected()
+  });
+};
+
 export const setupClientTools = (client: RealtimeClient, onMemorySet: (key: string, value: any) => void) => {
   // Add memory tool
   client.addTool(

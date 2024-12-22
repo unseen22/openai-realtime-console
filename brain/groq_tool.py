@@ -26,8 +26,9 @@ class GroqTool:
 
     def _get_api_key(self) -> str:
         """Get API key from environment variable"""
-        import os
         api_key = "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"
+        #"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"
+        #"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"
         if not api_key:
             raise ValueError("GROQ_API_KEY environment variable not set")
         return api_key
@@ -38,7 +39,8 @@ class GroqTool:
         model: str = "llama-3.3-70b-specdec",
         temperature: float = 0.1,
         max_tokens: int = 1024,
-        stream: bool = False
+        stream: bool = False,
+        response_format: dict = None
     ) -> Dict[str, Any]:
         """
         Send a chat completion request using Groq client
@@ -49,18 +51,24 @@ class GroqTool:
             temperature: Sampling temperature (0-1)
             max_tokens: Maximum tokens in response
             stream: Whether to stream the response
+            response_format: Optional format specification for the response
             
         Returns:
             API response as dictionary
         """
         try:
-            response = self.client.chat.completions.create(
-                messages=messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=stream
-            )
+            completion_args = {
+                "messages": messages,
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": stream
+            }
+            
+            if response_format:
+                completion_args["response_format"] = response_format
+            
+            response = self.client.chat.completions.create(**completion_args)
             
             # Convert the response object to a dictionary format
             return {
@@ -77,18 +85,23 @@ class GroqTool:
             print(f"Error calling Groq API: {str(e)}")
             raise
 
-    def generate_text(self, prompt: str, **kwargs) -> str:
+    def generate_text(self, prompt=None, messages=None, **kwargs) -> str:
         """
-        Simple text generation with a single prompt
+        Text generation with either a single prompt or a list of messages
         
         Args:
-            prompt: Text prompt
+            prompt: Text prompt (optional)
+            messages: List of message dictionaries (optional)
             **kwargs: Additional arguments passed to chat_completion
             
         Returns:
             Generated text response
         """
-        messages = [{"role": "user", "content": prompt}]
+        if messages is None and prompt is not None:
+            messages = [{"role": "user", "content": prompt}]
+        elif messages is None and prompt is None:
+            raise ValueError("Either prompt or messages must be provided")
+            
         response = self.chat_completion(messages, **kwargs)
         
         try:
