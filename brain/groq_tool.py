@@ -26,7 +26,7 @@ class GroqTool:
 
     def _get_api_key(self) -> str:
         """Get API key from environment variable"""
-        api_key = "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"#"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"#"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"#"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"#  #"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"
+        api_key = "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"#"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"#"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"#"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"#  #"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"
         
         if not api_key:
             raise ValueError("GROQ_API_KEY environment variable not set")

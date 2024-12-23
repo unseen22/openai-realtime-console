@@ -260,14 +260,17 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             dict: Status of the operation with organized plans
         """
         try:
+            print("🚀 Starting to add new plans...")
             groq = GroqTool()
             today = datetime.now().strftime("%Y-%m-%d")
+            print(f"📅 Today's date: {today}")
             
             # Convert any old format plans (strings) to new format (dicts)
             current_plans = []
             for plan in self.plans:
                 if isinstance(plan, str):
                     # Convert old string format to new dict format
+                    print(f"🔄 Converting old plan format: {plan}")
                     current_plans.append({
                         "plan": plan,
                         "start_date": today,  # Default to today for old plans
@@ -275,6 +278,9 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
                     })
                 else:
                     current_plans.append(plan)
+            
+            print(f"📋 Current plans after conversion: {current_plans}")
+            print(f"✨ New plans to organize: {new_plans}")
             
             # Create prompt to organize plans by time through persona's perspective
             prompt = f"""Given this persona's profile:
@@ -296,23 +302,29 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             
             Only return the JSON array."""
 
+            print("🤖 Sending prompt to Groq...")
             # Get organized new plans from Groq
-            response = groq.generate_text(prompt, temperature=0.7)
+            response = groq.generate_text(prompt, temperature=0.7, model="llama-3.1-8b-instant")
+            print(f"📝 Groq response: {response}")
             organized_new_plans = json.loads(response)
+            print(f"🎯 Organized new plans: {organized_new_plans}")
             
             # Add organized new plans while avoiding duplicates
             for plan_obj in organized_new_plans:
                 plan_text = plan_obj["plan"]
+                print(f"🔍 Checking for duplicate plan: {plan_text}")
                 # Only add if plan text doesn't already exist
                 if not any(
                     (isinstance(existing_plan, dict) and existing_plan.get("plan") == plan_text) or
                     (isinstance(existing_plan, str) and existing_plan == plan_text)
                     for existing_plan in current_plans
                 ):
+                    print(f"➕ Adding new plan: {plan_obj}")
                     current_plans.append(plan_obj)
             
             # Update self.plans with the merged list
             self.plans = current_plans
+            print(f"✅ Final plans list: {self.plans}")
             
             return {
                 "success": True,
@@ -321,6 +333,7 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             }
             
         except Exception as e:
+            print(f"❌ Error occurred: {str(e)}")
             return {
                 "success": False, 
                 "error": str(e)

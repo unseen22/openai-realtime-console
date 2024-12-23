@@ -161,31 +161,24 @@ reflection_instance = PersonaReflection()
 execute_schedule = PersonaExecuteSchedule()
 
 # Get and execute the schedule
-schedule_result = execute_schedule.get_schedule(persona_brain)
-
+schedule_result, updated_persona_brain = execute_schedule.get_schedule(persona_brain)
 
 # Only proceed with reflection if schedule was successful
-reflection_result = reflection_instance.reflect_on_day(persona_brain, schedule_result.get("results", []))
-persona_brain.create_memory(reflection_result, MemoryType.REFLECTION)
+reflection_result = reflection_instance.reflect_on_day(updated_persona_brain, schedule_result.get("results", []))
+updated_persona_brain.create_memory(reflection_result, MemoryType.REFLECTION)
 
-persona_brain._add_to_plans(reflection_result["plans"])
-
+print("⭐️ going to add to plans")
+updated_persona_brain._add_to_plans(reflection_result["plans"])
 
 # Save updated brain state after reflection and plan updates
 with open(brain_state_file, 'w') as f:
     json.dump({
-        'mood': persona_brain.mood,
-        'status': persona_brain.status, 
-        'plans': persona_brain.plans
+        'mood': updated_persona_brain.mood,
+        'status': updated_persona_brain.status, 
+        'plans': updated_persona_brain.plans
     }, f)
 
-
-
 print(f"❗️❗️❗️ this is the reflection result: {reflection_result} ❗️❗️❗️")
-print(f"✅ Schedule executed successfully: {schedule_result['results']}")
-
-
-
 
 # Create a context manager for database connections
 @contextmanager
@@ -213,7 +206,7 @@ st.dataframe(memories_df)
 
 # Display plans
 st.header("Current Plans") 
-if 'persona_brain' in locals():
-    st.write(persona_brain.plans)
+if 'updated_persona_brain' in locals():
+    st.write(updated_persona_brain.plans)
 else:
     st.write("No plans available - run the scheduler first")

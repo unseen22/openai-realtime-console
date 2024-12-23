@@ -1,9 +1,12 @@
 from groq_tool import GroqTool
 import json
+from llm_chooser import LLMChooser
 
 class PersonaReflection:
     def __init__(self):
+        self.llm_chooser = LLMChooser()
         self.groq = GroqTool()
+        
 
     def reflect_on_day(self, persona: str, schedule_results: dict) -> dict:
         """
@@ -38,16 +41,17 @@ class PersonaReflection:
         """
 
         try:
-            response = self.groq.chat_completion(
+            response = self.llm_chooser.generate_text(
+                provider="openai",
                 messages=[{"role": "user", "content": reflection_prompt}],
-                model="llama-3.3-70b-versatile",
+                model="gpt-4o",
                 temperature=0.8,
                 max_tokens=1024,
                 response_format={"type": "json_object"}
             )
             
-            # Parse the JSON response
-            reflection_data = json.loads(response["choices"][0]["message"]["content"])
+            # Parse the JSON string response directly
+            reflection_data = json.loads(response)
             return reflection_data
             
         except Exception as e:
