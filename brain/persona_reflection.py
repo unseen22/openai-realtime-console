@@ -4,8 +4,10 @@ from llm_chooser import LLMChooser
 
 class PersonaReflection:
     def __init__(self):
+        print("🔄 Initializing PersonaReflection...")
         self.llm_chooser = LLMChooser()
         self.groq = GroqTool()
+        print("✅ PersonaReflection initialized successfully")
         
 
     def reflect_on_day(self, persona: str, schedule_results: dict) -> dict:
@@ -19,6 +21,9 @@ class PersonaReflection:
         Returns:
             dict: Contains the reflection text and any insights
         """
+        print("\n🤔 Starting daily reflection process...")
+        print(f"📊 Schedule results received: {json.dumps(schedule_results, indent=2)}")
+
         reflection_prompt = f"""
         As {persona.persona_profile}, reflect on your day and experiences:
         
@@ -40,7 +45,9 @@ class PersonaReflection:
         - key_insights: List of main takeaways from the day
         """
 
+        print("\n🤖 Generating reflection using LLM...")
         try:
+            print("📝 Sending reflection prompt to OpenAI...")
             response = self.llm_chooser.generate_text(
                 provider="openai",
                 messages=[{"role": "user", "content": reflection_prompt}],
@@ -50,17 +57,22 @@ class PersonaReflection:
                 response_format={"type": "json_object"}
             )
             
+            print("✨ Successfully received LLM response")
+            print("🔄 Parsing reflection data...")
+            
             # Parse the JSON string response directly
             reflection_data = json.loads(response)
+            print(f"\n📋 Reflection Summary:\n{json.dumps(reflection_data, indent=2)}")
             return reflection_data
             
         except Exception as e:
-            print(f"Error generating reflection: {str(e)}")
-            return {
+            print(f"❌ Error generating reflection: {str(e)}")
+            error_response = {
                 "error": "Failed to generate reflection",
                 "details": str(e),
                 "reflection": "",
                 "plans": []
             }
+            print(f"⚠️ Returning error response:\n{json.dumps(error_response, indent=2)}")
+            return error_response
 
-    

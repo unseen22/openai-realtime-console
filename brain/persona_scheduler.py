@@ -44,7 +44,7 @@ class PersonaScheduler:
         print("\n=== PERSONA DETAILS ===")
         print(f"👤 Profile: {persona.persona_profile}")
         print(f"📝 Plans: {json.dumps(plans, indent=2)}")
-        print(f"📜 Recent history: {[memory.content for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}")
+        print(f"📜 Recent history: {[memory.content for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-3:]}")
         
         plans_prompt = f"""Given this persona's profile:
         {persona.persona_profile}
@@ -54,7 +54,7 @@ class PersonaScheduler:
         This is the current date:
         {datetime.now().strftime("%Y-%m-%d")}
         And these recent history:
-        {[{"content": memory.content, "timestamp": memory.timestamp} for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}
+        {[{"content": memory.content, "timestamp": memory.timestamp} for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-3:]}
 
         Please evaluate which plans are most important to prioritize today. Consider:
         1. Urgency and time-sensitivity

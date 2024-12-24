@@ -304,7 +304,7 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
 
             print("🤖 Sending prompt to Groq...")
             # Get organized new plans from Groq
-            response = groq.generate_text(prompt, temperature=0.7, model="llama-3.1-8b-instant")
+            response = groq.generate_text(prompt, temperature=0.7, model="llama-3.3-70b-versatile")
             print(f"📝 Groq response: {response}")
             organized_new_plans = json.loads(response)
             print(f"🎯 Organized new plans: {organized_new_plans}")

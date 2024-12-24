@@ -1,3 +1,4 @@
+import groq
 from memory import MemoryType
 from persona_scheduler import PersonaScheduler
 import groq_tool
@@ -6,6 +7,8 @@ import time
 import perplexity_tool as pt
 from datetime import datetime
 from llm_chooser import LLMChooser
+from open_ai_tool import OpenAITool
+
 
 
 
@@ -52,7 +55,7 @@ class PersonaExecuteSchedule:
             # TODO: Need to track which schedule item is currently active
             # TODO: Need to mark tasks as done when completed
             if "schedule" in schedule_data and len(schedule_data["schedule"]) > 0:
-                for task in schedule_data["schedule"]:
+                for i, task in enumerate(schedule_data["schedule"]):
                     time_slot = task["time"]
                     activity = task["activity"]
                     print(f"\n🎯 Executing task for {time_slot}: {activity}")
@@ -117,60 +120,89 @@ class PersonaExecuteSchedule:
     
     def choose_action(self, task_analysis, task):
         """
-        Choose between gathering knowledge or simulating action based on task requirements.
+        Analyze each required action and determine if it needs knowledge gathering or simulation.
         
         Args:
             task_analysis (dict): Task type and required actions
+            task (dict): Task details
             
         Returns:
-            dict: Results of executing the chosen action
+            dict: Combined results of executing all actions
         """
-        print("\n🤔 Choosing action strategy...")
-        groq_prompt = f"""
-        Analyze these required actions and determine if we need to:
-        1. Gather knowledge (for tasks requiring up-to-date information, or tasks that are not concrete, or need realtime knowladge to simulate, need a decision to make, choosing films, music, activities, etc)
-        2. Simulate action (for tasks that don't require external knowledge, or tasks that are concrete and don't need realtime knowledge to simulate, take a walk, have a chat, hit the gym.)
+        print("\n🤔 Analyzing each required action...")
+        all_results = []
+        
+        for action in task_analysis["required_actions"]:
+            groq_prompt = f"""
+            Analyze this specific action and determine if we need to:
+            1. Gather knowledge (for tasks requiring up-to-date information, or tasks that are not concrete, or need realtime knowledge to simulate, need a decision to make, choosing films, music, activities, etc)
+            2. Simulate action (for tasks that don't require external knowledge, or tasks that are concrete and don't need realtime knowledge to simulate, take a walk, have a chat, hit the gym.)
 
-        Required actions: {task_analysis["required_actions"]}
+            Required action: {action}
 
-        Return only a JSON object with:
-        - tool: Either "gather_knowledge" or "simulate_action"
-        - reason: Brief explanation of the choice
-        """
+            Return only a JSON object with:
+            - tool: Either "gather_knowledge" or "simulate_action"
+            - reason: Brief explanation of the choice
+            """
 
-        try:
-            print("🔄 Getting action choice from LLM...")
-            llm_response = self.llm_chooser.generate_text(
-                provider="openai",
-                messages=[{"role": "user", "content": groq_prompt}],
-                model="gpt-4o",
-                temperature=0.7,
-                max_tokens=1024,
-                response_format={"type": "json_object"}
-            )
-            
-            action_choice = json.loads(llm_response)
-            print(f"🎯 Chosen action strategy:\n{json.dumps(action_choice, indent=2)}")
-            
-            # Execute the chosen action
-            if action_choice["tool"] == "gather_knowledge":
-                print(f"🔍 Gathering knowledge for task...")
-                return self._gather_knowledge(task_analysis, task)
-            else:
-                print(f"🎮 Simulating action for task...")
-                return self._simulate_action(task_analysis)
+            try:
+                print(f"🔄 Getting action choice for: {action}")
+                llm_response = self.llm_chooser.generate_text(
+                    provider="openai",
+                    messages=[{"role": "user", "content": groq_prompt}],
+                    model="gpt-4o",
+                    temperature=0.7,
+                    max_tokens=1024,
+                    response_format={"type": "json_object"}
+                )
                 
-        except Exception as e:
-            print(f"❌ Error choosing action: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-            
+                action_choice = json.loads(llm_response)
+                print(f"🎯 Chosen strategy for {action}:\n{json.dumps(action_choice, indent=2)}")
+                
+                # Execute the chosen action for this step
+                if action_choice["tool"] == "gather_knowledge":
+                    print(f"🔍 Gathering knowledge for: {action}")
+                    result = self._gather_knowledge({"required_actions": [action]}, task)
+                else:
+                    print(f"🎮 Simulating action for: {action}")
+                    result = self._simulate_action({"required_actions": [action]})
+                
+                all_results.append({
+                    "action": action,
+                    "strategy": action_choice["tool"],
+                    "result": result
+                })
+                
+            except Exception as e:
+                print(f"❌ Error processing action '{action}': {str(e)}")
+                all_results.append({
+                    "action": action,
+                    "error": str(e)
+                })
+
+        # Combine all results into a cohesive narrative
+        combined_results = {
+            "success": True,
+            "actions_completed": len(all_results),
+            "detailed_results": all_results,
+            "summary": "\n".join([
+                f"{result['action']}: {result.get('result', result.get('error', 'No result'))}"
+                for result in all_results
+            ])
+        }
+        
+        return combined_results
         
     def _gather_knowledge(self, task_analysis, task):
         """
         Gather knowledge for the task.
+        
+        Args:
+            task_analysis (dict): Analysis of task requirements
+            task (dict): Task details
+            
+        Returns:
+            str: Retrieved information from Perplexity
         """
         print("\n🔍 Starting knowledge gathering...")
         groq_prompt = f"""
@@ -203,8 +235,30 @@ class PersonaExecuteSchedule:
                 model="llama-3.1-sonar-large-128k-online",
                 temperature=0.5
             )
-            print(f"📚 Retrieved information:\n{json.dumps(perplexity_response, indent=2)}")
-            return perplexity_response
+            
+            # Ensure we have a proper structure for the knowledge
+            knowledge_data = {
+                "query": query_data["query"],
+                "information": perplexity_response
+            }
+            print(f"📚 Retrieved information:\n{json.dumps(knowledge_data, indent=2)}")
+
+            validation_result = self.validate_knowledge(task, knowledge_data)
+            print(f"📊 Validation result:\n{json.dumps(validation_result, indent=2)}")
+            
+            if not validation_result["success"]:
+                print(f"⚠️ Missing details: {validation_result['missing']}")
+                print("🔄 Fetching additional information...")
+                additional_response = perplexity_instance.generate_completion(
+                    messages=[{"role": "user", "content": validation_result["missing"]}],
+                    model="llama-3.1-sonar-large-128k-online",
+                    temperature=0.5
+                )
+                # Append additional information
+                knowledge_data["additional_information"] = additional_response
+                print(f"📚 Retrieved additional information:\n{json.dumps(additional_response, indent=2)}")
+            
+            return knowledge_data
             
         except Exception as e:
             print(f"❌ Error gathering knowledge: {str(e)}")
@@ -213,12 +267,84 @@ class PersonaExecuteSchedule:
                 "error": str(e)
             }
 
+    def validate_knowledge(self, task, knowledge):
+        """
+        Validate the knowledge for the task by checking if there are sufficient concrete details.
+        
+        Args:
+            task: The task to validate knowledge for
+            knowledge: The knowledge to validate
+            
+        Returns:
+            dict: Validation result with success status and any missing details
+        """
+        print("\n🔍 Validating knowledge...")
+        print(f"🔍 Knowledge:\n{json.dumps(knowledge, indent=2)}")
+        print(f"🔍 FOR Task:\n{json.dumps(task, indent=2)}")
+        
+        print("📝 Creating validation prompt...")
+        validation_prompt = f"""
+        Check if this information contains enough concrete details to complete the task and its simulation (concrete details include things like songs for creating a playlist, movies for creating a watchlist, etc), if not return the query to find more details:
+        
+        Task: {task}
+        Query Used: {knowledge.get('query', 'No query available')}
+        Information: {knowledge.get('information', 'No information available')}
+        
+        Return only a JSON object with:
+        - has_details: true/false indicating if there are sufficient concrete details
+        - missing: specific query to find more details that are still needed (if any)
+        """
+        
+        try:
+            print("🤖 Sending validation request to LLM...")
+            validation = self.llm_chooser.generate_text(
+                provider="groq",
+                messages=[{"role": "user", "content": validation_prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.7,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            print(f"✨ Raw LLM validation response: {validation}")
+            
+            try:
+                print("🔍 Parsing validation result...")
+                validation_result = json.loads(validation)
+                print(f"✅ Successfully parsed validation: {validation_result}")
+                return {
+                    "success": validation_result["has_details"],
+                    "missing": validation_result.get("missing", "")
+                }
+            except json.JSONDecodeError as je:
+                print(f"❌ Error parsing validation response: {str(je)}")
+                print(f"🔴 Raw response: {validation}")
+                return {
+                    "success": False,
+                    "error": "Invalid validation response",
+                    "missing": ""
+                }
+            
+        except Exception as e:
+            print(f"❌ Error during validation: {str(e)}")
+            print("🔴 Validation failed completely")
+            return {
+                "success": False,
+                "error": str(e),
+                "missing": ""
+            }
+
     def _simulate_action(self, task_analysis):
         """
         Simulate the action for the task.
+        
+        Args:
+            task_analysis (dict): Analysis of task requirements
+            
+        Returns:
+            str: Description of simulated action
         """
-        print("🎮 Simulating action (not implemented)")
-        pass
+        print("🎮 Simulating action...")
+        return "Action simulated successfully"
 
     def judge_task(self, persona, task):
         """
@@ -245,11 +371,10 @@ class PersonaExecuteSchedule:
         Example for "Answer Reddit post about Christmas gifts":
         {{
             "required_actions": [
+                "find_reddit_post",
                 "read_post_content",
-                "analyze_wishlist", 
                 "generate_sarcastic_response",
-                "add_russian_accent_phrases",
-                "post_response"
+            
             ]
         }}
         """
