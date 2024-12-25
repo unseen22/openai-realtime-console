@@ -48,7 +48,8 @@ class PersonaScheduler:
         
         plans_prompt = f"""Given this persona's profile:
         {persona.persona_profile}
-
+        Theser are the general goals of this persona:
+        {persona.goals}
         And these current plans:
         {plans}
         This is the current date:
@@ -66,7 +67,9 @@ class PersonaScheduler:
         1. Top 3 prioritized plans for today
         2. Brief explanation for each priority
         """
-        print("\n🤖 Requesting plan priorities from LLM...")
+
+
+        print(f"🤖 Requesting plan priorities from LLM...THIS IS THE PROMPT: {plans_prompt}")
         try:
             response = self.llm_chooser.generate_text(
                 provider="openai",

@@ -21,6 +21,7 @@ class Brain:
         self.embedder = Embedder()
         self._load_memories()
         self.plans = []  # List of strings representing planned actions
+        self.goals = ["Learn to code", "Find out what is the newest Anime hit"]  # List of strings representing goals
 
     def _load_memories(self):
         """Load memories for the current persona from database"""

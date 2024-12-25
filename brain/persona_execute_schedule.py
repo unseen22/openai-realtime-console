@@ -118,7 +118,7 @@ class PersonaExecuteSchedule:
 
  
     
-    def choose_action(self, task_analysis, task):
+    def choose_action(self, task_analysis, task, persona):
         """
         Analyze each required action and determine if it needs knowledge gathering or simulation.
         
@@ -165,7 +165,7 @@ class PersonaExecuteSchedule:
                     result = self._gather_knowledge({"required_actions": [action]}, task)
                 else:
                     print(f"🎮 Simulating action for: {action}")
-                    result = self._simulate_action({"required_actions": [action]})
+                    result = self._simulate_action({"required_actions": [action]}, persona)
                 
                 all_results.append({
                     "action": action,
@@ -333,7 +333,7 @@ class PersonaExecuteSchedule:
                 "missing": ""
             }
 
-    def _simulate_action(self, task_analysis):
+    def _simulate_action(self, action, persona):
         """
         Simulate the action for the task.
         
@@ -343,6 +343,46 @@ class PersonaExecuteSchedule:
         Returns:
             str: Description of simulated action
         """
+        groq_prompt = f"""
+        You are simulating an action for a persona with these characteristics:
+        - Profile: {persona.persona_profile}
+        - Current mood: {persona.mood} 
+        - Current status: {persona.status}
+        
+        The action to simulate is: {action} with the result of the action: FAILED.
+
+        Return only a JSON object with:
+        - action: The action that was simulated
+        - result: A detailed description of what happened
+        - mood: The persona's mood after completing the action
+        - status: The persona's status after completing the action
+        """
+
+        try:
+            print("🤖 Simulating action with LLM...")
+            llm_response = self.llm_chooser.generate_text(
+                provider="openai",
+                messages=[{"role": "user", "content": groq_prompt}],
+                model="gpt-4o",
+                temperature=0.7,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            
+            simulation_result = json.loads(llm_response)
+            print(f"✅ Successfully simulated action: {json.dumps(simulation_result, indent=2)}")
+            return simulation_result
+            
+        except Exception as e:
+            print(f"❌ Error simulating action: {str(e)}")
+            return {
+                "action": str(action),
+                "result": "Failed to simulate action",
+                "mood": persona.mood,
+                "status": persona.status
+            }
+        """
+
         print("🎮 Simulating action...")
         return "Action simulated successfully"
 
