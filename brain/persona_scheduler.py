@@ -48,7 +48,7 @@ class PersonaScheduler:
         
         plans_prompt = f"""Given this persona's profile:
         {persona.persona_profile}
-        Theser are the general goals of this persona:
+        Take into account the goals of this persona:
         {persona.goals}
         And these current plans:
         {plans}
@@ -105,9 +105,11 @@ class PersonaScheduler:
         groq_prompt = f"""
         Generate a daily schedule for a persona, take into account the persona's profile and recent history and the plans to do today.
         Persona Profile: {persona.persona_profile}
-        Recent History: {[{"content": memory.content, "timestamp": memory.timestamp} for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}
+        Take into account the goals of this persona: {persona.goals}
+        These are the recent exeriences: {[{"content": memory.content, "timestamp": memory.timestamp} for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}
 
         Plans to do: {plans_to_use}
+      
         Today is: {datetime.now().strftime("%Y-%m-%d")}
         Always add to schedule only 1 activity per time slot.
 

@@ -17,6 +17,7 @@ class PersonaExecuteSchedule:
         print("🔄 Initializing PersonaExecuteSchedule...")
         self.groq = groq_tool.GroqTool()
         self.llm_chooser = LLMChooser()
+        self.current_task_index = 0  # Track current task
         print("✅ PersonaExecuteSchedule initialized successfully")
         
     def get_schedule(self, persona):
@@ -52,27 +53,48 @@ class PersonaExecuteSchedule:
             print("\n⏳ Processing schedule tasks...")
             task_results = {}
             updated_persona = persona
-            # TODO: Need to track which schedule item is currently active
-            # TODO: Need to mark tasks as done when completed
+            
             if "schedule" in schedule_data and len(schedule_data["schedule"]) > 0:
-                for i, task in enumerate(schedule_data["schedule"]):
+                schedule_items = schedule_data["schedule"]
+                for i, task in enumerate(schedule_items):
+                    self.current_task_index = i
                     time_slot = task["time"]
                     activity = task["activity"]
-                    print(f"\n🎯 Executing task for {time_slot}: {activity}")
-                    result, updated_persona = self._execute_task(updated_persona, {"activity": activity})
-                    task_results[time_slot] = result
+                    
+                    print(f"\n🎯 Executing task {i+1}/{len(schedule_items)} for {time_slot}: {activity}")
+                    
+                    # Pass complete task info including time_slot
+                    result, updated_persona = self._execute_task(updated_persona, {
+                        "time": time_slot,
+                        "activity": activity,
+                        "task_number": i + 1,
+                        "total_tasks": len(schedule_items)
+                    })
+                    
+                    # Mark task as completed
+                    task_results[time_slot] = {
+                        "activity": activity,
+                        "result": result,
+                        "completed": True,
+                        "completion_time": datetime.now().isoformat()
+                    }
+                    
+                    print(f"✅ Completed task {i+1}/{len(schedule_items)}: {activity}")
                 
             print("\n✅ Schedule processing completed successfully")
             return {
                 "success": True,
-                "results": task_results
+                "results": task_results,
+                "completed_tasks": len(task_results),
+                "total_tasks": len(schedule_data["schedule"]) if "schedule" in schedule_data else 0
             }, updated_persona
             
         except Exception as e:
             print(f"❌ Error executing schedule: {str(e)}")
             return {
                 "success": False, 
-                "error": str(e)
+                "error": str(e),
+                "completed_tasks": len(task_results) if 'task_results' in locals() else 0
             }, persona
 
     def _execute_task(self, persona, task):
@@ -88,11 +110,11 @@ class PersonaExecuteSchedule:
         """
         print(f"\n📋 Executing task: {json.dumps(task, indent=2)}")
         print("🔍 Analyzing task requirements...")
-        task_analysis = self.judge_task(persona, task)
-        print(f"📊 Task analysis results:\n{json.dumps(task_analysis, indent=2)}")
+        task_actions = self.judge_task(persona, task)
+        print(f"📊 Task analysis results:\n{json.dumps(task_actions, indent=2)}")
         
         print("🎮 Choosing action strategy...")
-        action_result = self.choose_action(task_analysis, task)
+        action_result = self.choose_action(task_actions, task, persona)
         time.sleep(1)
 
         print("📝 Generating experience diary entry...")
@@ -100,100 +122,140 @@ class PersonaExecuteSchedule:
         You are {persona.persona_profile} and you are going to write a diary entry about completing this task: {task} with the following knowledge: {action_result}.
         Write the diary entry in a way that is consistent with your personality and characteristics, describing what actually happened.
         Return only a JSON object with:
-        - diary_entry: A first-person past-tense account of completing the task, including your thoughts, feelings and reactions
+        - diary_entry: A first-person past-tense account of completing the task, including your thoughts, feelings and reactions and details of the action.
         - timestamp: The time the task was completed
+        - mood: Your emotional state after completing this task
+        - status: Your current status after this experience
         """
 
-        groq_response = self.llm_chooser.generate_text(
-            provider="openai",
-            messages=[{"role": "user", "content": experience_prompt}],
-            model="gpt-4o",
-            temperature=0.5,
-            max_tokens=1024,
-            response_format={"type": "json_object"}
-        )
-        print(f"📔 Generated diary entry:\n{json.dumps(groq_response, indent=2)}")
-        persona.create_memory(groq_response, MemoryType.EXPERIENCE)
-        return groq_response, persona
+        try:
+            groq_response = self.llm_chooser.generate_text(
+                provider="openai",
+                messages=[{"role": "user", "content": experience_prompt}],
+                model="gpt-4o",
+                temperature=0.5,
+                max_tokens=1024,
+                response_format={"type": "json_object"}
+            )
+            
+            # Ensure groq_response is a dictionary
+            if isinstance(groq_response, str):
+                groq_response = json.loads(groq_response)
+                
+            print(f"📔 Generated diary entry:\n{json.dumps(groq_response, indent=2)}")
+            persona.create_memory(groq_response, MemoryType.EXPERIENCE)
+            
+            # Ensure these fields exist
+            persona.mood = groq_response.get("mood", "neutral")
+            persona.status = groq_response.get("status", "normal")
+            
+            # Return a properly structured result
+            task_result = {
+                "diary_entry": groq_response.get("diary_entry", ""),
+                "timestamp": groq_response.get("timestamp", datetime.now().isoformat()),
+                "mood": groq_response.get("mood", "neutral"),
+                "status": groq_response.get("status", "normal"),
+                "action_details": action_result
+            }
+            
+            return task_result, persona
+            
+        except Exception as e:
+            print(f"❌ Error in _execute_task: {str(e)}")
+            return {
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "mood": "neutral",
+                "status": "error occurred"
+            }, persona
 
- 
-    
-    def choose_action(self, task_analysis, task, persona):
+    def choose_action(self, task_actions, task, persona):
         """
         Analyze each required action and determine if it needs knowledge gathering or simulation.
         
         Args:
-            task_analysis (dict): Task type and required actions
+            task_actions (dict): Task type and required actions
             task (dict): Task details
+            persona: The persona object
             
         Returns:
             dict: Combined results of executing all actions
         """
         print("\n🤔 Analyzing each required action...")
         all_results = []
+        current_mood = persona.mood if hasattr(persona, 'mood') else "neutral"
+        current_status = persona.status if hasattr(persona, 'status') else "normal"
         
-        for action in task_analysis["required_actions"]:
-            groq_prompt = f"""
-            Analyze this specific action and determine if we need to:
-            1. Gather knowledge (for tasks requiring up-to-date information, or tasks that are not concrete, or need realtime knowledge to simulate, need a decision to make, choosing films, music, activities, etc)
-            2. Simulate action (for tasks that don't require external knowledge, or tasks that are concrete and don't need realtime knowledge to simulate, take a walk, have a chat, hit the gym.)
+        try:
+            for action in task_actions.get("required_actions", []):
+                groq_prompt = f"""
+                Analyze this specific action and determine if we need to:
+                1. Gather knowledge (for tasks requiring up-to-date information, or tasks that are not concrete, or need realtime knowledge to simulate, need a decision to make, choosing films, music, activities, etc)
+                2. Simulate action (for tasks that don't require external knowledge, or tasks that are concrete and don't need realtime knowledge to simulate, take a walk, have a chat, hit the gym.)
 
-            Required action: {action}
+                Required action: {action}
 
-            Return only a JSON object with:
-            - tool: Either "gather_knowledge" or "simulate_action"
-            - reason: Brief explanation of the choice
-            """
+                Return only a JSON object with:
+                - tool: Either "gather_knowledge" or "simulate_action"
+                - reason: Brief explanation of the choice
+                """
 
-            try:
-                print(f"🔄 Getting action choice for: {action}")
-                llm_response = self.llm_chooser.generate_text(
-                    provider="openai",
-                    messages=[{"role": "user", "content": groq_prompt}],
-                    model="gpt-4o",
-                    temperature=0.7,
-                    max_tokens=1024,
-                    response_format={"type": "json_object"}
-                )
-                
-                action_choice = json.loads(llm_response)
-                print(f"🎯 Chosen strategy for {action}:\n{json.dumps(action_choice, indent=2)}")
-                
-                # Execute the chosen action for this step
-                if action_choice["tool"] == "gather_knowledge":
-                    print(f"🔍 Gathering knowledge for: {action}")
-                    result = self._gather_knowledge({"required_actions": [action]}, task)
-                else:
-                    print(f"🎮 Simulating action for: {action}")
-                    result = self._simulate_action({"required_actions": [action]}, persona)
-                
-                all_results.append({
-                    "action": action,
-                    "strategy": action_choice["tool"],
-                    "result": result
-                })
-                
-            except Exception as e:
-                print(f"❌ Error processing action '{action}': {str(e)}")
-                all_results.append({
-                    "action": action,
-                    "error": str(e)
-                })
+                try:
+                    print(f"🔄 Getting action choice for: {action}")
+                    llm_response = self.llm_chooser.generate_text(
+                        provider="openai",
+                        messages=[{"role": "user", "content": groq_prompt}],
+                        model="gpt-4o",
+                        temperature=0.7,
+                        max_tokens=1024,
+                        response_format={"type": "json_object"}
+                    )
+                    
+                    # Ensure response is a dictionary
+                    action_choice = llm_response if isinstance(llm_response, dict) else json.loads(llm_response)
+                    print(f"🎯 Chosen strategy for {action}:\n{json.dumps(action_choice, indent=2)}")
+                    
+                    # Execute the chosen action for this step
+                    if action_choice.get("tool") == "gather_knowledge":
+                        print(f"🔍 Gathering knowledge for: {action}")
+                        result = self._gather_knowledge(action, task)
+                    else:
+                        print(f"🎮 Simulating action for: {action}")
+                        result = self._simulate_action(action, persona, current_mood, current_status)
+                        current_mood = result.get("mood", current_mood)
+                        current_status = result.get("status", current_status)
+                    
+                    all_results.append({
+                        "action": action,
+                        "strategy": action_choice.get("tool"),
+                        "result": result
+                    })
+                    
+                except Exception as e:
+                    print(f"❌ Error processing action '{action}': {str(e)}")
+                    all_results.append({
+                        "action": action,
+                        "error": str(e)
+                    })
 
-        # Combine all results into a cohesive narrative
-        combined_results = {
-            "success": True,
-            "actions_completed": len(all_results),
-            "detailed_results": all_results,
-            "summary": "\n".join([
-                f"{result['action']}: {result.get('result', result.get('error', 'No result'))}"
-                for result in all_results
-            ])
-        }
-        
-        return combined_results
-        
-    def _gather_knowledge(self, task_analysis, task):
+            # Return properly structured results
+            return {
+                "success": True,
+                "actions_completed": len(all_results),
+                "detailed_results": all_results,
+                "final_mood": current_mood,
+                "final_status": current_status
+            }
+            
+        except Exception as e:
+            print(f"❌ Error in choose_action: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "actions_completed": len(all_results) if all_results else 0
+            }
+
+    def _gather_knowledge(self, action, task):
         """
         Gather knowledge for the task.
         
@@ -206,8 +268,7 @@ class PersonaExecuteSchedule:
         """
         print("\n🔍 Starting knowledge gathering...")
         groq_prompt = f"""
-        Create a search query to gather information needed for completing these actions this {task}:
-        {task_analysis["required_actions"]}
+        Create a search query to gather information needed for completing this actions: {action} to complete this task {task}.
         Find up to date information on the topic, top 10 results and trending topics. 
         Always add todays date in the query which is {datetime.now().strftime("%Y-%m-%d")}
         Return only a JSON object with:
@@ -258,7 +319,13 @@ class PersonaExecuteSchedule:
                 knowledge_data["additional_information"] = additional_response
                 print(f"📚 Retrieved additional information:\n{json.dumps(additional_response, indent=2)}")
             
-            return knowledge_data
+            # Create structured response
+            structured_response = {
+                "action": action,
+                "result": knowledge_data
+            }
+
+            return structured_response
             
         except Exception as e:
             print(f"❌ Error gathering knowledge: {str(e)}")
@@ -333,7 +400,7 @@ class PersonaExecuteSchedule:
                 "missing": ""
             }
 
-    def _simulate_action(self, action, persona):
+    def _simulate_action(self, action, persona, current_mood, current_status):
         """
         Simulate the action for the task.
         
@@ -343,13 +410,16 @@ class PersonaExecuteSchedule:
         Returns:
             str: Description of simulated action
         """
+
+        print(f"🔍 INSIDE SIMULATE ACTION")
         groq_prompt = f"""
         You are simulating an action for a persona with these characteristics:
         - Profile: {persona.persona_profile}
-        - Current mood: {persona.mood} 
-        - Current status: {persona.status}
+        - Current mood: {current_mood} 
+        - Current status: {current_status}
+        - This is the last thing you were doing: {[memory.content for memory in persona.memories.values()][-1] if persona.memories else "Nothing"}
         
-        The action to simulate is: {action} with the result of the action: FAILED.
+        The action to simulate is: {action} with the result of the action: Unsuccessful.
 
         Return only a JSON object with:
         - action: The action that was simulated
@@ -357,6 +427,8 @@ class PersonaExecuteSchedule:
         - mood: The persona's mood after completing the action
         - status: The persona's status after completing the action
         """
+
+        print(f"🖕 INSIDE SIMULATE ACTION THE PROMPT IS: {groq_prompt}")
 
         try:
             print("🤖 Simulating action with LLM...")
@@ -378,13 +450,10 @@ class PersonaExecuteSchedule:
             return {
                 "action": str(action),
                 "result": "Failed to simulate action",
-                "mood": persona.mood,
-                "status": persona.status
+                "mood": current_mood,
+                "status": current_status
             }
-        """
-
-        print("🎮 Simulating action...")
-        return "Action simulated successfully"
+      
 
     def judge_task(self, persona, task):
         """
@@ -406,15 +475,14 @@ class PersonaExecuteSchedule:
         Persona Profile: {persona.persona_profile}
 
         Return only a JSON object with:
-        - required_actions: Array of specific action steps for how this persona would complete the task
+        - required_actions: Array of specific action steps for how this persona would complete the task, no more than 3 actions
 
         Example for "Answer Reddit post about Christmas gifts":
         {{
             "required_actions": [
                 "find_reddit_post",
                 "read_post_content",
-                "generate_sarcastic_response",
-            
+                "generate_sarcastic_response"
             ]
         }}
         """
