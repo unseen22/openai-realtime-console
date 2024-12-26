@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from ..brain import Brain
+from ..memory import MemoryType
 from ..persona_scheduler import PersonaScheduler
 from .memory_graph import MemoryGraph
 from .memory_node import MemoryNode, NodeType, RelationType
@@ -14,6 +15,7 @@ class MemoryIntegration:
         self.memory_graph = MemoryGraph()
         self.activity_logger = ActivityLogger(self.memory_graph)
         self.reflection_engine = ReflectionEngine(self.memory_graph, self.activity_logger)
+        print("\n🔄 Initializing MemoryIntegration")
         
     def process_schedule(self, schedule: Dict[str, Any]) -> None:
         """Process a new schedule and log activities"""
@@ -165,7 +167,7 @@ class MemoryIntegration:
             for pref in preferences
         ]
     
-    def search_activities(self, query: str) -> List[Dict[str, Any]]:
+    def search_activities(self, query: str) -> Dict[str, List[Dict[str, Any]]]:
         """Search for activities and related memories"""
         
         # Search in memory graph
