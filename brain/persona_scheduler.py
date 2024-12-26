@@ -1,9 +1,10 @@
 import json
-from memory import MemoryType
-from groq_tool import GroqTool
-from perplexity_tool import PerplexityHandler
-from llm_chooser import LLMChooser
+from brain.memory import MemoryType
+from brain.groq_tool import GroqTool
+from brain.perplexity_tool import PerplexityHandler
+from brain.llm_chooser import LLMChooser
 from datetime import datetime
+from langsmith import traceable
 
 class PersonaScheduler:
     def __init__(self):
@@ -13,7 +14,7 @@ class PersonaScheduler:
         self.llm_chooser = LLMChooser()
         print("✅ PersonaScheduler initialized successfully")
 
-
+    @traceable
     def get_plans(self, persona):
         """Evaluate and prioritize plans for the persona based on their profile.
         
@@ -96,6 +97,7 @@ class PersonaScheduler:
                 "error": f"Failed to get plan priorities: {str(e)}"
             }
 
+    @traceable
     def create_daily_schedule(self, persona):
         print("\n📅 CREATING DAILY SCHEDULE...")
         plans_result = self.get_plans(persona)
@@ -140,7 +142,7 @@ class PersonaScheduler:
             
             json_response = json.loads(response)
             print("✅ Successfully parsed schedule")
-            return json_response
+            return json_response, plans_result
             
         except json.JSONDecodeError as e:
             print(f"❌ JSON decode error: {str(e)}")
@@ -162,10 +164,10 @@ class PersonaScheduler:
         print("\n🎯 GENERATING PERSONA SCHEDULE...")
         try:
             print("📅 Creating base schedule...")
-            schedule = self.create_daily_schedule(persona)
+            schedule, plans_result = self.create_daily_schedule(persona)
             
             print("🔄 Modernizing activities...")
-            schedule = self.modernize_activities(schedule, persona)
+            schedule = self.modernize_activities(schedule, persona, plans_result)
             
             print("✅ Schedule generation complete")
             return {
@@ -184,7 +186,8 @@ class PersonaScheduler:
         print("\n⏰ Validating schedule times...")
         return schedule
 
-    def modernize_activities(self, schedule, persona):
+    @traceable
+    def modernize_activities(self, schedule, persona, plans_result):
         print("\n🔄 MODERNIZING ACTIVITIES...")
         if isinstance(schedule, dict) and "error" in schedule:
             print("⚠️ Schedule contains error - skipping modernization")
@@ -233,9 +236,19 @@ class PersonaScheduler:
             And this persona profile:
             {persona.persona_profile}
 
+            And this persona earlier activities:
+            {[memory.content for memory in persona.memories.values()][-5:] if persona.memories else "Nothing"}
+
             Change the shedule according to this feedback:
             {modern_suggestions}
             
+            Also remember the persona's general goals:
+            {persona.goals}
+
+            And the plans to do today:
+            {plans_result}
+
+
             Return only a JSON object with the same schedule structure but with the modernized activities.
             The schedule should have:
             - success: true

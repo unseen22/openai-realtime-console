@@ -2,15 +2,16 @@ from typing import Dict, Any, Optional, List, Tuple
 import json
 import os
 from datetime import datetime
+from brain.story_engine.characteristic import Characteristics
 
-from memory import Memory, MemoryType
-from database import Database
-from embedder import Embedder
-from groq_tool import GroqTool
+from .memory import Memory, MemoryType
+from .database import Database
+from .embedder import Embedder
+from .groq_tool import GroqTool
 from pathlib import Path
 
 class Brain:
-    def __init__(self, persona_id: str, persona_name: str, persona_profile: str, db_path: str = "memories.db"):
+    def __init__(self, persona_id: str, persona_name: str, persona_profile: str, db_path: str = "memories.db", characteristics: Optional[Characteristics] = None, goals: Optional[List[str]] = None):
         self.persona_id = persona_id
         self.persona_name = persona_name
         self.persona_profile = persona_profile
@@ -21,7 +22,15 @@ class Brain:
         self.embedder = Embedder()
         self._load_memories()
         self.plans = []  # List of strings representing planned actions
-        self.goals = ["Learn to code", "Find out what is the newest Anime hit"]  # List of strings representing goals
+        self.goals = goals if goals is not None else []  # Properly initialize goals with provided value or empty list
+        # Initialize characteristics with provided values or defaults
+        self.characteristics = characteristics if characteristics is not None else Characteristics(
+            mind=0,
+            body=0, 
+            heart=0,
+            soul=0,
+            will=0
+        )
 
     def _load_memories(self):
         """Load memories for the current persona from database"""

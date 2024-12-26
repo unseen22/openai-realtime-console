@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional
-from embedder import Embedder
+from .embedder import Embedder
 
 class MemoryType(Enum):
     CONVERSATION = "conversation"

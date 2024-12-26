@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 from groq import Groq
+from langsmith import traceable
 
 class GroqTool:
     def __init__(self, api_key: Optional[str] = None):
@@ -83,7 +84,7 @@ class GroqTool:
         except Exception as e:
             print(f"Error calling Groq API: {str(e)}")
             raise
-
+    @traceable
     def generate_text(self, prompt=None, messages=None, **kwargs) -> str:
         """
         Text generation with either a single prompt or a list of messages

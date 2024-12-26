@@ -1,27 +1,19 @@
+import sys
+import pathlib
 import json
-import os
-from brain import Brain
-from memory import MemoryType
-from persona_scheduler import PersonaScheduler
-from persona_execute_schedule import PersonaExecuteSchedule
-from persona_reflection import PersonaReflection
-import streamlit as st
-import sqlite3
-import pandas as pd
-from contextlib import contextmanager
 
+# Add the root directory to Python path
+root_dir = str(pathlib.Path(__file__).parent.parent.parent)
+sys.path.append(root_dir)
 
+from brain.brain import Brain
+from brain.story_engine.roller import StoryRoller
+from brain.story_engine.characteristic import Characteristics
 
-persona = {
-    "name": "Hanna",
-    "profile_prompt": """Hanna's Action-Oriented Personality Profile
-
+profile_prompt = """Hanna's Action-Oriented Personality Profile
 I. Core Motivations & Values:
-
 Core Need: To express herself physically and creatively, driven by a desire for excitement and emotional release.
-
 Underlying Desire: To find a sense of belonging and purpose, which she initially found in competitive track and field but now seeks in music and performance.
-
 Core Value: Authenticity, high energy, and finding that high.
 
 Conflict: Between her need for physical expression and her physical limitations due to her ankle injury. Also, a struggle between her hyper-energy and finding calm.
@@ -120,93 +112,109 @@ Emotion: Openly reactive, but would try to hide more complex emotions.
 
 Social: Highly social, but has no issue being alone.
 
-Style: Bold, Vibrant and high energy, but can find comfort in chill things.""",
-    "recent_history": {}
-}
+Style: Bold, Vibrant and high energy, but can find comfort in chill things."""
 
+class StoryEngineTester:
+    def __init__(self, persona_id: str = "test_persona"):
+        """Initialize the story engine tester with a test persona"""
+        print("🔧 Initializing StoryEngineTester...")
+        self.persona_id = persona_id
+        self.persona_name = "Hanna"
+        self.persona_profile = profile_prompt
+        
+        print(f"👤 Creating test persona: {self.persona_name}")
+        # Initialize brain with test persona
+        self.brain = Brain(
+            persona_id=self.persona_id,
+            persona_name=self.persona_name,
+            persona_profile=self.persona_profile,
+            db_path="test_memories.db",
+            characteristics=Characteristics(
+                mind=1,
+                body=2, 
+                heart=3,
+                soul=4,
+                will=5
+            )
+        )
+        print("🧠 Brain initialized with test characteristics")
+        
+        # Initialize story roller with brain's characteristics
+        self.roller = StoryRoller(self.brain)
+        print("🎲 Story roller initialized")
+        print("✅ StoryEngineTester setup complete")
+        
+    def test_task(self, task: str) -> dict:
+        """Test a specific task and return the outcome with details"""
+        print(f"\n🎲 Testing task: {task}")
+        
+    
+        print("🎯 Rolling for outcome...")
+        success = self.roller.roll_for_outcome(task)
+        print(f"{'✅ Task succeeded!' if success else '❌ Task failed!'}")
 
-# Initialize brain for test persona
-# Try to load existing brain state from file
-brain_state_file = "hanna_brain_state.json"
-if os.path.exists(brain_state_file):
-    with open(brain_state_file, 'r') as f:
-        saved_state = json.load(f)
-    persona_brain = Brain(
-        persona_id="hanna",
-        persona_name=persona["name"], 
-        persona_profile=persona["profile_prompt"],
-        db_path="test_memories.db"
-    )
-    persona_brain.mood = saved_state.get('mood', 'neutral')
-    persona_brain.status = saved_state.get('status', 'active')
-    persona_brain.plans = saved_state.get('plans', [])
-else:
-    # Create new brain if no saved state exists
-    persona_brain = Brain(
-        persona_id="hanna",
-        persona_name=persona["name"],
-        persona_profile=persona["profile_prompt"],
-        db_path="test_memories.db"
-    )
+        return {
+            "task": task,
+            "success": success
+        }
+            
 
-# Save brain state after initialization
-with open(brain_state_file, 'w') as f:
-    json.dump({
-        'mood': persona_brain.mood,
-        'status': persona_brain.status,
-        'plans': persona_brain.plans
-    }, f)
+            # Create a memory of the attempt
+            
+        
+    def run_test_suite(self, tasks: list[str]) -> list[dict]:
+        """Run a series of tests with different tasks"""
+        print("\n🚀 Running test suite...")
+        print(f"📋 Total tasks to test: {len(tasks)}")
+        results = []
+        
+        for i, task in enumerate(tasks, 1):
+            print(f"\n📌 Testing task {i}/{len(tasks)}")
+            result = self.test_task(task)
+            results.append(result)
+            print(f"✨ Task {i} complete")
+            
+        print("\n🏁 Test suite completed!")
+        return results
 
-reflection_instance = PersonaReflection()
-execute_schedule = PersonaExecuteSchedule()
-
-# Get and execute the schedule
-schedule_result, updated_persona_brain = execute_schedule.get_schedule(persona_brain)
-
-# Only proceed with reflection if schedule was successful
-reflection_result = reflection_instance.reflect_on_day(updated_persona_brain, schedule_result.get("results", []))
-updated_persona_brain.create_memory(reflection_result, MemoryType.REFLECTION)
-
-print("⭐️ going to add to plans")
-updated_persona_brain._add_to_plans(reflection_result["plans"])
-
-# Save updated brain state after reflection and plan updates
-with open(brain_state_file, 'w') as f:
-    json.dump({
-        'mood': updated_persona_brain.mood,
-        'status': updated_persona_brain.status, 
-        'plans': updated_persona_brain.plans
-    }, f)
-
-print(f"❗️❗️❗️ this is the reflection result: {reflection_result} ❗️❗️❗️")
-
-# Create a context manager for database connections
-@contextmanager
-def get_connection():
-    conn = sqlite3.connect("test_memories.db")
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-# Modify the Streamlit section
-st.title("Memory Browser")
-
-# Query memories using the context manager
-with get_connection() as conn:
-    memories_df = pd.read_sql_query("""
-        SELECT timestamp, memory_type, content, importance 
-        FROM memories
-        ORDER BY timestamp DESC
-    """, conn)
-
-# Display memories
-st.header("Stored Memories")
-st.dataframe(memories_df)
-
-# Display plans
-st.header("Current Plans") 
-if 'updated_persona_brain' in locals():
-    st.write(updated_persona_brain.plans)
-else:
-    st.write("No plans available - run the scheduler first")
+if __name__ == "__main__":
+    print("\n🔬 Starting StoryEngineTester main execution")
+    
+    # Create test engine
+    print("🛠️ Creating test engine...")
+    tester = StoryEngineTester()
+    
+    # Define test tasks
+    print("📝 Defining test tasks...")
+    test_tasks = [
+        "Research quantum computing basics",
+        "Do 50 pushups",
+        "Write a poem about AI",
+        "Meditate for an hour",
+        "Debug a complex code problem",
+        "Tie your shoes",
+        "Cycle 100km",
+        "Get a new girlfriend"
+        "Find a new hobby",
+        "Hunt a dear",
+        "Find a new job",
+    ]
+    
+    # Run tests
+    print("🏃 Running tests...")
+    results = tester.run_test_suite(test_tasks)
+    
+    # Print results
+    print("\n📊 Test Results:")
+    for result in results:
+        print(f"\n📎 Task: {result['task']}")
+        if 'error' in result:
+            print(f"❌ Error: {result['error']}")
+        else:
+            outcome_map = {
+                "super_success": "✨ Super Success!",
+                "success": "✅ Success!",
+                "failure": "❌ Failure!",
+                "super_failure": "💥 Super Failure!"
+            }
+            print(f"Outcome: {outcome_map[result['success']]}")

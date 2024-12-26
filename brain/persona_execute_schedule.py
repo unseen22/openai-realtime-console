@@ -1,14 +1,15 @@
 import groq
-from memory import MemoryType
-from persona_scheduler import PersonaScheduler
-import groq_tool
+from brain.memory import MemoryType
+from brain.persona_scheduler import PersonaScheduler
+import brain.groq_tool as groq_tool
 import json
 import time
-import perplexity_tool as pt
+import brain.perplexity_tool as pt
 from datetime import datetime
-from llm_chooser import LLMChooser
-from open_ai_tool import OpenAITool
-
+from brain.llm_chooser import LLMChooser
+from brain.open_ai_tool import OpenAITool
+from brain.story_engine.roller import StoryRoller
+from langsmith import traceable
 
 
 
@@ -20,6 +21,7 @@ class PersonaExecuteSchedule:
         self.current_task_index = 0  # Track current task
         print("✅ PersonaExecuteSchedule initialized successfully")
         
+    @traceable
     def get_schedule(self, persona):
         """
         Process and execute tasks from the provided schedule.
@@ -30,7 +32,7 @@ class PersonaExecuteSchedule:
         Returns:
             tuple: (schedule_results, updated_persona)
         """
-        print("\n📅 Starting schedule processing...")
+        print("\n📅 Starting schedule processing with tracing...")
         try:
             # Create new schedule using PersonaScheduler
             print("🎯 Creating new schedule...")
@@ -60,7 +62,6 @@ class PersonaExecuteSchedule:
                     self.current_task_index = i
                     time_slot = task["time"]
                     activity = task["activity"]
-                    
                     print(f"\n🎯 Executing task {i+1}/{len(schedule_items)} for {time_slot}: {activity}")
                     
                     # Pass complete task info including time_slot
@@ -82,6 +83,7 @@ class PersonaExecuteSchedule:
                     print(f"✅ Completed task {i+1}/{len(schedule_items)}: {activity}")
                 
             print("\n✅ Schedule processing completed successfully")
+            # TODO: Have you Completed any plans? If yes, delete it from the plans list, or modify it.
             return {
                 "success": True,
                 "results": task_results,
@@ -97,6 +99,7 @@ class PersonaExecuteSchedule:
                 "completed_tasks": len(task_results) if 'task_results' in locals() else 0
             }, persona
 
+    @traceable
     def _execute_task(self, persona, task):
         """
         Execute a single task from the schedule.
@@ -108,7 +111,7 @@ class PersonaExecuteSchedule:
         Returns:
             tuple: (task_result, updated_persona)
         """
-        print(f"\n📋 Executing task: {json.dumps(task, indent=2)}")
+        print("\n📋 Executing task with tracing: {task}")
         print("🔍 Analyzing task requirements...")
         task_actions = self.judge_task(persona, task)
         print(f"📊 Task analysis results:\n{json.dumps(task_actions, indent=2)}")
@@ -169,6 +172,7 @@ class PersonaExecuteSchedule:
                 "status": "error occurred"
             }, persona
 
+    @traceable
     def choose_action(self, task_actions, task, persona):
         """
         Analyze each required action and determine if it needs knowledge gathering or simulation.
@@ -181,7 +185,7 @@ class PersonaExecuteSchedule:
         Returns:
             dict: Combined results of executing all actions
         """
-        print("\n🤔 Analyzing each required action...")
+        print("\n🤔 Analyzing each required action with tracing...")
         all_results = []
         current_mood = persona.mood if hasattr(persona, 'mood') else "neutral"
         current_status = persona.status if hasattr(persona, 'status') else "normal"
@@ -221,7 +225,13 @@ class PersonaExecuteSchedule:
                         result = self._gather_knowledge(action, task)
                     else:
                         print(f"🎮 Simulating action for: {action}")
-                        result = self._simulate_action(action, persona, current_mood, current_status)
+                        roller = StoryRoller(persona)
+                        story_engine_result = roller.roll_for_outcome(action)
+                        print(f"🎲 Roll outcome: {story_engine_result}")
+                        if not isinstance(story_engine_result, str):
+                            print(f"❌ Invalid roll result type: {type(story_engine_result)}")
+                            story_engine_result = "failure"  # Default to failure if invalid result
+                        result = self._simulate_action(action, persona, current_mood, current_status, story_engine_result)
                         current_mood = result.get("mood", current_mood)
                         current_status = result.get("status", current_status)
                     
@@ -255,6 +265,7 @@ class PersonaExecuteSchedule:
                 "actions_completed": len(all_results) if all_results else 0
             }
 
+    @traceable
     def _gather_knowledge(self, action, task):
         """
         Gather knowledge for the task.
@@ -266,7 +277,7 @@ class PersonaExecuteSchedule:
         Returns:
             str: Retrieved information from Perplexity
         """
-        print("\n🔍 Starting knowledge gathering...")
+        print("\n🔍 Starting knowledge gathering with tracing...")
         groq_prompt = f"""
         Create a search query to gather information needed for completing this actions: {action} to complete this task {task}.
         Find up to date information on the topic, top 10 results and trending topics. 
@@ -334,6 +345,7 @@ class PersonaExecuteSchedule:
                 "error": str(e)
             }
 
+    @traceable
     def validate_knowledge(self, task, knowledge):
         """
         Validate the knowledge for the task by checking if there are sufficient concrete details.
@@ -345,7 +357,7 @@ class PersonaExecuteSchedule:
         Returns:
             dict: Validation result with success status and any missing details
         """
-        print("\n🔍 Validating knowledge...")
+        print("\n🔍 Validating knowledge with tracing...")
         print(f"🔍 Knowledge:\n{json.dumps(knowledge, indent=2)}")
         print(f"🔍 FOR Task:\n{json.dumps(task, indent=2)}")
         
@@ -400,7 +412,8 @@ class PersonaExecuteSchedule:
                 "missing": ""
             }
 
-    def _simulate_action(self, action, persona, current_mood, current_status):
+    @traceable
+    def _simulate_action(self, action, persona, current_mood, current_status, story_engine_result):
         """
         Simulate the action for the task.
         
@@ -411,7 +424,7 @@ class PersonaExecuteSchedule:
             str: Description of simulated action
         """
 
-        print(f"🔍 INSIDE SIMULATE ACTION")
+        print(f"🔍 INSIDE SIMULATE ACTION with tracing")
         groq_prompt = f"""
         You are simulating an action for a persona with these characteristics:
         - Profile: {persona.persona_profile}
@@ -419,7 +432,7 @@ class PersonaExecuteSchedule:
         - Current status: {current_status}
         - This is the last thing you were doing: {[memory.content for memory in persona.memories.values()][-1] if persona.memories else "Nothing"}
         
-        The action to simulate is: {action} with the result of the action: Unsuccessful.
+        The action to simulate is: {action} with the result of the action: {story_engine_result}.
 
         Return only a JSON object with:
         - action: The action that was simulated
@@ -455,6 +468,7 @@ class PersonaExecuteSchedule:
             }
       
 
+    @traceable
     def judge_task(self, persona, task):
         """
         Judge the task type based on the persona and task and determine execution strategy.
@@ -466,7 +480,7 @@ class PersonaExecuteSchedule:
         Returns:
             dict: Task execution plan with type and required actions
         """
-        print("\n⚖️ Analyzing task requirements...")
+        print("\n⚖️ Analyzing task requirements with tracing...")
         # Use LLM to analyze and determine task type
         groq_prompt = f"""
         Given this activity and persona, determine the specific steps needed to complete the task in the persona's unique style.

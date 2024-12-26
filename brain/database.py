@@ -1,6 +1,6 @@
 import sqlite3
 from typing import List, Dict, Optional
-from memory import Memory, MemoryType
+from .memory import Memory, MemoryType
 import json
 
 class Database:
