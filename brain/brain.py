@@ -3,41 +3,46 @@ import json
 import os
 from datetime import datetime
 from brain.story_engine.characteristic import Characteristics
-
-from .memory import Memory, MemoryType
-from .database import Database
+from .memory import Memory, MemoryType, RelationType
 from .embedder import Embedder
 from .groq_tool import GroqTool
+
 from pathlib import Path
 
 class Brain:
-    def __init__(self, persona_id: str, persona_name: str, persona_profile: str, db_path: str = "memories.db", characteristics: Optional[Characteristics] = None, goals: Optional[List[str]] = None):
+    def __init__(self, persona_id: str, persona_name: str, persona_profile: str, 
+                 neo4j_uri: str = "bolt://localhost:7687",
+                 neo4j_user: str = "neo4j",
+                 neo4j_password: str = "password",
+                 characteristics: Optional[Characteristics] = None, 
+                 goals: Optional[List[str]] = None):
         self.persona_id = persona_id
         self.persona_name = persona_name
         self.persona_profile = persona_profile
-        self.db = Database(db_path)
         self.mood: str = 'neutral'
         self.status: str = 'active'
         self.memories: Dict[str, Memory] = {}
         self.embedder = Embedder()
         self._load_memories()
-        self.plans = []  # List of strings representing planned actions
-        self.goals = goals if goals is not None else []  # Properly initialize goals with provided value or empty list
-        # Initialize characteristics with provided values or defaults
+        self.plans = []
+        self.goals = goals if goals is not None else []
         self.characteristics = characteristics if characteristics is not None else Characteristics(
-            mind=0,
-            body=0, 
-            heart=0,
-            soul=0,
-            will=0
+            mind=0, body=0, heart=0, soul=0, will=0
         )
 
     def _load_memories(self):
-        """Load memories for the current persona from database"""
-        memories = self.db.get_memories(self.persona_id)
+        """Load memories for the current persona from Neo4j"""
+        memory_dicts = self.graph_store.get_all_memories(self.persona_id)
         self.memories = {
-            memory.timestamp.isoformat(): memory 
-            for memory in memories
+            memory_dict["timestamp"]: Memory(
+                content=memory_dict["content"],
+                vector=memory_dict["vector"],
+                importance=memory_dict["importance"],
+                memory_type=MemoryType(memory_dict["memory_type"]),
+                timestamp=datetime.fromisoformat(memory_dict["timestamp"]),
+                node_id=memory_dict["node_id"]
+            ) 
+            for memory_dict in memory_dicts
         }
 
     def create_embedding(self, text: str) -> List[float]:
@@ -92,31 +97,25 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         return False
 
     def create_memory(self, content: str | dict, memory_type: MemoryType = MemoryType.CONVERSATION) -> Optional[Memory]:
-        """Create a new memory with the given content if it doesn't already exist"""
+        """Create a new memory and store it in Neo4j graph"""
         print(f"\nCreating new memory: {content}...")
         
-        # Convert dictionary content to string if necessary
         if isinstance(content, dict):
             content = json.dumps(content)
         
-        # Check for duplicate content
         if self.has_duplicate_content(content):
             print("Duplicate content found, skipping")
             return None
         
-        # Create embedding for the content
         vector = self.create_embedding(content)
         print(f"Generated embedding vector of length: {len(vector)}")
         
-        # Verify vector
         if not vector or len(vector) == 0:
             print("Warning: Generated empty vector")
             return None
             
-        # Calculate importance
         importance = self.calculate_importance(content)
         
-        # Create memory instance
         memory = Memory(
             content=content,
             vector=vector,
@@ -125,62 +124,110 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             timestamp=datetime.now()
         )
         
+        # Store in Neo4j and get node ID
+        node_id = self.graph_store.create_memory_node(memory, self.persona_id)
+        memory.node_id = node_id
+        
         # Store the memory using its timestamp as a key
         memory_key = memory.timestamp.isoformat()
         self.memories[memory_key] = memory
         
-        # Store in database
-        self.db.store_memory(self.persona_id, memory)
+        self._create_temporal_relationships(memory)
+        self._create_semantic_relationships(memory)
         
         print(f"Successfully created memory with key: {memory_key}")
         return memory
 
-    def search_similar_memories(self, query: str, top_k: int = 3) -> List[Tuple[Memory, float]]:
-        """
-        Search for memories similar to the query text
+    def _create_temporal_relationships(self, memory: Memory):
+        """Create temporal relationships with nearby memories"""
+        sorted_memories = sorted(self.memories.values(), key=lambda x: x.timestamp)
+        current_index = sorted_memories.index(memory)
         
-        Args:
-            query: Text to search for
-            top_k: Number of results to return
+        # Connect to previous and next memory
+        if current_index > 0:
+            prev_memory = sorted_memories[current_index - 1]
+            self.graph_store.create_relationship(
+                memory.node_id,
+                prev_memory.node_id,
+                RelationType.TEMPORAL.value
+            )
+            memory.add_relationship(prev_memory.node_id)
             
-        Returns:
-            List of tuples containing (Memory, similarity_score)
-        """
+        if current_index < len(sorted_memories) - 1:
+            next_memory = sorted_memories[current_index + 1]
+            self.graph_store.create_relationship(
+                memory.node_id,
+                next_memory.node_id,
+                RelationType.TEMPORAL.value
+            )
+            memory.add_relationship(next_memory.node_id)
+
+    def _create_semantic_relationships(self, memory: Memory, threshold: float = 0.7):
+        """Create semantic relationships based on vector similarity"""
+        for other_memory in self.memories.values():
+            if other_memory.node_id == memory.node_id:
+                continue
+                
+            similarity = self.embedder.cosine_similarity(memory.vector, other_memory.vector)
+            if similarity > threshold:
+                weight = similarity
+                self.graph_store.create_relationship(
+                    memory.node_id,
+                    other_memory.node_id,
+                    RelationType.SEMANTIC.value,
+                    weight
+                )
+                memory.add_relationship(other_memory.node_id, weight)
+
+    def get_related_memories(self, memory: Memory, relationship_type: Optional[RelationType] = None) -> List[Tuple[Memory, float]]:
+        """Get memories related to the given memory"""
+        related = self.graph_store.get_related_memories(
+            memory.node_id,
+            relationship_type.value if relationship_type else None
+        )
+        
+        result = []
+        for record in related:
+            related_memory = Memory.from_dict(record["related"])
+            weight = record["weight"]
+            result.append((related_memory, weight))
+            
+        return result
+
+    def search_similar_memories(self, query: str, top_k: int = 3) -> List[Tuple[Memory, float]]:
+        """Search for memories similar to the query text using Neo4j vector similarity search"""
         print(f"\nSearching for memories similar to: {query}")
         
-        # Get query embedding
         query_embedding = self.create_embedding(query)
         
-        # Calculate similarity scores for all memories
-        memory_scores: List[Tuple[Memory, float]] = []
+        # Use Neo4j for vector similarity search
+        results = self.graph_store.search_similar_vectors(
+            query_vector=query_embedding,
+            persona_id=self.persona_id,
+            top_k=top_k
+        )
         
-        for memory in self.memories.values():
-            if not memory.vector or len(memory.vector) == 0:
-                print(f"Warning: Memory has no vector: {memory.content[:100]}...")
-                continue
-                
-            if len(memory.vector) != len(query_embedding):
-                print(f"Warning: Memory vector length ({len(memory.vector)}) doesn't match query vector length ({len(query_embedding)})")
-                continue
-                
-            similarity = self.embedder.cosine_similarity(query_embedding, memory.vector)
+        memory_scores = []
+        for result in results:
+            memory_dict = result["memory"]
+            memory = Memory(
+                content=memory_dict["content"],
+                vector=memory_dict["vector"],
+                importance=memory_dict["importance"],
+                memory_type=MemoryType(memory_dict["memory_type"]),
+                timestamp=datetime.fromisoformat(memory_dict["timestamp"]),
+                node_id=memory_dict["node_id"]
+            )
+            similarity = result["similarity"]
             memory_scores.append((memory, similarity))
+            print(f"Found memory: {memory.content[:100]}... (similarity: {similarity:.4f})")
         
-        # Sort by similarity score and return top k
-        memory_scores.sort(key=lambda x: x[1], reverse=True)
-        actual_k = min(top_k, len(memory_scores))
-        top_memories = memory_scores[:actual_k]
-        
-        print(f"\nFound {len(top_memories)} similar memories:")
-        for memory, score in top_memories:
-            print(f"Memory: {memory.content[:100]}... (similarity: {score:.4f})")
-        
-        return top_memories
+        return memory_scores
 
     def clear_memories(self):
-        """Clear all memories for this persona"""
+        """Clear all memories for this persona from Neo4j"""
+        self.graph_store.clear_all_memories(self.persona_id)
         self.memories = {}
-        self.db.clear_memories(self.persona_id)
 
     def get_all_memories(self) -> List[Memory]:
         """Get all memories for this persona"""
@@ -315,7 +362,7 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             print("🤖 Sending prompt to Groq...")
             # Get organized new plans from Groq
             response = groq.generate_text(prompt, temperature=0.7, model="llama-3.3-70b-versatile")
-            print(f"📝 Groq response: {response}")
+            print(f"���� Groq response: {response}")
             organized_new_plans = json.loads(response)
             print(f"🎯 Organized new plans: {organized_new_plans}")
             
@@ -348,3 +395,43 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
                 "success": False, 
                 "error": str(e)
             }
+
+    def __del__(self):
+        """Cleanup Neo4j connection on deletion"""
+        if hasattr(self, 'graph_store'):
+            self.graph_store.close()
+
+    def search_memories_by_text(self, query: str, limit: int = 5) -> List[Tuple[Memory, float]]:
+        """Search memories using text search
+        
+        Args:
+            query: Text to search for
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of tuples containing (Memory, score)
+        """
+        print(f"\nPerforming text search for: {query}")
+        
+        results = self.graph_store.search_fulltext(
+            query=query,
+            persona_id=self.persona_id,
+            limit=limit
+        )
+        
+        memory_scores = []
+        for result in results:
+            memory_dict = result["memory"]
+            memory = Memory(
+                content=memory_dict["content"],
+                vector=memory_dict["vector"],
+                importance=memory_dict["importance"],
+                memory_type=MemoryType(memory_dict["memory_type"]),
+                timestamp=datetime.fromisoformat(memory_dict["timestamp"]),
+                node_id=memory_dict["node_id"]
+            )
+            score = result["score"]
+            memory_scores.append((memory, score))
+            print(f"Found memory: {memory.content[:100]}... (score: {score:.4f})")
+        
+        return memory_scores
