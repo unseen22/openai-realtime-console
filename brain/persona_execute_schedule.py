@@ -10,16 +10,39 @@ from brain.llm_chooser import LLMChooser
 from brain.open_ai_tool import OpenAITool
 from brain.story_engine.roller import StoryRoller
 from langsmith import traceable
+from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.experimental.memory_parcer import MemoryParser
+from brain.embedder import Embedder
+from typing import Optional
 
 
 
 class PersonaExecuteSchedule:
-    def __init__(self):
+    def __init__(self, neo4j_graph: Optional[Neo4jGraph] = None):
         print("🔄 Initializing PersonaExecuteSchedule...")
         self.groq = groq_tool.GroqTool()
         self.llm_chooser = LLMChooser()
         self.current_task_index = 0  # Track current task
+        
+        # Use provided Neo4j connection or create new one
+        self.graph = neo4j_graph if neo4j_graph else Neo4jGraph(
+            uri="neo4j+s://a9277d8e.databases.neo4j.io",
+            username="neo4j",
+            password="tKSk2m5MwQr9w25IbSnB07KccMmTfjFtjcCsQIraczk"
+        )
+        self.embedder = Embedder()
+        self.parser = MemoryParser(neo4j_graph=self.graph)
         print("✅ PersonaExecuteSchedule initialized successfully")
+        
+    def __del__(self):
+        """Cleanup Neo4j connection when the object is destroyed"""
+        try:
+            # Only close if we created the connection
+            if hasattr(self, 'graph') and not hasattr(self, '_graph_provided'):
+                self.graph.close()
+                print("✅ Neo4j connection closed")
+        except Exception as e:
+            print(f"❌ Error closing Neo4j connection: {str(e)}")
         
     @traceable
     def get_schedule(self, persona):
@@ -57,13 +80,12 @@ class PersonaExecuteSchedule:
             updated_persona = persona
             
             if "schedule" in schedule_data and len(schedule_data["schedule"]) > 0:
-                schedule_items = schedule_data["schedule"]
-                for i, task in enumerate(schedule_items):
+                schedule_items = schedule_data["schedule"][2:3]  # Only take items 2-4
+                for i, task in enumerate(schedule_items, start=2):  # Start enumeration from 2
                     self.current_task_index = i
                     time_slot = task["time"]
-                    activity = task["activity"]
-                    print(f"\n🎯 Executing task {i+1}/{len(schedule_items)} for {time_slot}: {activity}")
-                    
+                    activity = task["activity"] 
+                    print(f"\n🎯 Executing task {i+1}/{len(schedule_data['schedule'])} for {time_slot}: {activity}")
                     # Pass complete task info including time_slot
                     result, updated_persona = self._execute_task(updated_persona, {
                         "time": time_slot,
@@ -146,9 +168,55 @@ class PersonaExecuteSchedule:
                 groq_response = json.loads(groq_response)
                 
             print(f"📔 Generated diary entry:\n{json.dumps(groq_response, indent=2)}")
-            persona.create_memory(groq_response, MemoryType.EXPERIENCE)
             
-            # Ensure these fields exist
+            # Store memory in Neo4j
+            diary_entry = groq_response.get("diary_entry", "")
+            if diary_entry:
+                # Generate embedding for the diary entry
+                diary_vector = self.embedder.embed_memory(diary_entry)
+                
+                # Get mood and emotional value from the response
+                current_mood = groq_response.get("mood", "neutral")
+                # Map mood to emotional value more accurately
+                emotional_mapping = {
+                    "happy": 0.8,
+                    "excited": 0.9,
+                    "content": 0.6,
+                    "neutral": 0.5,
+                    "tired": 0.4,
+                    "sad": 0.3,
+                    "angry": 0.2,
+                    "frustrated": 0.3
+                }
+                emotional_value = emotional_mapping.get(
+                    current_mood.lower(),
+                    0.5  # Default to neutral if mood not found
+                )
+                
+                # Create memory node in Neo4j
+                memory_id = self.graph.create_memory_node(
+                    persona_id=persona.persona_id,
+                    content=diary_entry,
+                    memory_type=MemoryType.EXPERIENCE.value,  # Convert enum to string
+                    importance=0.7,  # Default importance for experiences
+                    emotional_value=emotional_value,
+                    vector=diary_vector,
+                    timestamp=datetime.now(),
+                    mood=current_mood  # Store the exact mood string
+                )
+                
+                # Categorize and link topics
+                topic_ids = self.parser.categorize_memory(diary_entry)
+                if topic_ids:
+                    self.parser.link_memory_to_topics(memory_id, topic_ids)
+                    print("Memory categorized with topics:")
+                    for topic_id in topic_ids:
+                        topic_path = self.parser.get_topic_path(topic_id)
+                        print(f"  - {' -> '.join(topic_path)}")
+                else:
+                    print("No topics found for this memory")
+            
+            # Update persona state
             persona.mood = groq_response.get("mood", "neutral")
             persona.status = groq_response.get("status", "normal")
             
@@ -441,7 +509,7 @@ class PersonaExecuteSchedule:
         - status: The persona's status after completing the action
         """
 
-        print(f"🖕 INSIDE SIMULATE ACTION THE PROMPT IS: {groq_prompt}")
+        print(f"🖕 INSIDE SIMULATE ACTION THE PROMPT IS: {groq_prompt[100:]}")
 
         try:
             print("🤖 Simulating action with LLM...")

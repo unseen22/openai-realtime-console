@@ -2,48 +2,134 @@ from typing import Dict, Any, Optional, List, Tuple
 import json
 import os
 from datetime import datetime
+from pathlib import Path
+
 from brain.story_engine.characteristic import Characteristics
+from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.experimental.memory_parcer import MemoryParser
 from .memory import Memory, MemoryType, RelationType
 from .embedder import Embedder
 from .groq_tool import GroqTool
 
-from pathlib import Path
-
 class Brain:
-    def __init__(self, persona_id: str, persona_name: str, persona_profile: str, 
-                 neo4j_uri: str = "bolt://localhost:7687",
+    def __init__(self, persona_id: str, persona_name: str = None, persona_profile: str = None, 
+                 neo4j_uri: str = "neo4j+s://a9277d8e.databases.neo4j.io",
                  neo4j_user: str = "neo4j",
-                 neo4j_password: str = "password",
+                 neo4j_password: str = "tKSk2m5MwQr9w25IbSnB07KccMmTfjFtjcCsQIraczk",
                  characteristics: Optional[Characteristics] = None, 
-                 goals: Optional[List[str]] = None):
+                 goals: Optional[List[str]] = None,
+                 neo4j_graph: Optional[Neo4jGraph] = None):
+        """Initialize Brain with Neo4j state management
+        
+        Args:
+            persona_id: Unique identifier for the persona
+            persona_name: Name of the persona (only needed for new personas)
+            persona_profile: Profile of the persona (only needed for new personas)
+            neo4j_uri: URI for Neo4j connection (not used if neo4j_graph is provided)
+            neo4j_user: Neo4j username (not used if neo4j_graph is provided)
+            neo4j_password: Neo4j password (not used if neo4j_graph is provided)
+            characteristics: Optional characteristics
+            goals: Optional goals
+            neo4j_graph: Optional existing Neo4j connection
+        """
         self.persona_id = persona_id
-        self.persona_name = persona_name
-        self.persona_profile = persona_profile
-        self.mood: str = 'neutral'
-        self.status: str = 'active'
-        self.memories: Dict[str, Memory] = {}
         self.embedder = Embedder()
+        self.graph_store = neo4j_graph if neo4j_graph else Neo4jGraph(neo4j_uri, neo4j_user, neo4j_password)
+        self.memory_parser = MemoryParser(neo4j_graph=self.graph_store)
+        
+        try:
+            # Try to load existing persona
+            state = self.graph_store.get_persona_state(persona_id)
+            self.persona_name = state["name"]
+            self.persona_profile = state["profile"]
+            self.mood = state["mood"]
+            self.status = state["status"]
+            self.plans = state["plans"]
+            self.goals = state["goals"]
+            
+            # Load characteristics from state
+            char_dict = state.get("characteristics", {})
+            self.characteristics = Characteristics(
+                mind=char_dict.get("mind", 0),
+                body=char_dict.get("body", 0),
+                heart=char_dict.get("heart", 0),
+                soul=char_dict.get("soul", 0),
+                will=char_dict.get("will", 0)
+            )
+            print(f"✅ Loaded existing persona {persona_id}")
+        except ValueError:
+            # Create new persona if not found
+            if not persona_name or not persona_profile:
+                raise ValueError("persona_name and persona_profile required for new personas")
+            
+            self.persona_name = persona_name
+            self.persona_profile = persona_profile
+            self.mood = "neutral"
+            self.status = "active"
+            self.plans = []
+            self.goals = goals if goals is not None else []
+            self.characteristics = characteristics if characteristics is not None else Characteristics(
+                mind=0, body=0, heart=0, soul=0, will=0
+            )
+            
+            # Create persona in Neo4j with characteristics
+            char_dict = {
+                "mind": self.characteristics.mind,
+                "body": self.characteristics.body,
+                "heart": self.characteristics.heart,
+                "soul": self.characteristics.soul,
+                "will": self.characteristics.will
+            }
+            
+            self.graph_store.create_persona_node(
+                persona_id=persona_id,
+                persona_name=persona_name,
+                persona_profile=persona_profile,
+                characteristics=char_dict
+            )
+            
+            # Initialize state
+            self.graph_store.update_persona_state(
+                persona_id=persona_id,
+                mood=self.mood,
+                status=self.status,
+                plans=self.plans,
+                goals=self.goals,
+                characteristics=char_dict
+            )
+            print(f"✅ Created new persona {persona_id}")
+            
+        # Load memories
+        self.memories = {}
         self._load_memories()
-        self.plans = []
-        self.goals = goals if goals is not None else []
-        self.characteristics = characteristics if characteristics is not None else Characteristics(
-            mind=0, body=0, heart=0, soul=0, will=0
-        )
 
     def _load_memories(self):
         """Load memories for the current persona from Neo4j"""
         memory_dicts = self.graph_store.get_all_memories(self.persona_id)
-        self.memories = {
-            memory_dict["timestamp"]: Memory(
-                content=memory_dict["content"],
-                vector=memory_dict["vector"],
-                importance=memory_dict["importance"],
-                memory_type=MemoryType(memory_dict["memory_type"]),
-                timestamp=datetime.fromisoformat(memory_dict["timestamp"]),
-                node_id=memory_dict["node_id"]
-            ) 
-            for memory_dict in memory_dicts
-        }
+        self.memories = {}
+        
+        for memory_data in memory_dicts:
+            try:
+                # Extract memory data from the nested structure
+                memory_dict = memory_data.get("memory", {})
+                
+                # Create Memory object with proper field mapping
+                memory = Memory(
+                    content=memory_dict.get("content", ""),
+                    vector=memory_dict.get("vector", []),
+                    importance=memory_dict.get("importance", 0.0),
+                    memory_type=MemoryType(memory_dict.get("type", "conversation")),  # Map 'type' to memory_type
+                    timestamp=datetime.fromisoformat(memory_dict.get("timestamp", datetime.now().isoformat())),
+                    node_id=memory_dict.get("node_id", None)
+                )
+                
+                # Use timestamp as key
+                memory_key = memory.timestamp.isoformat()
+                self.memories[memory_key] = memory
+                
+            except Exception as e:
+                print(f"Error loading memory: {str(e)}")
+                continue
 
     def create_embedding(self, text: str) -> List[float]:
         """Create embeddings using BGE model"""
@@ -97,7 +183,7 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         return False
 
     def create_memory(self, content: str | dict, memory_type: MemoryType = MemoryType.CONVERSATION) -> Optional[Memory]:
-        """Create a new memory and store it in Neo4j graph"""
+        """Create a new memory and store it in Neo4j graph with topic categorization"""
         print(f"\nCreating new memory: {content}...")
         
         if isinstance(content, dict):
@@ -128,6 +214,10 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         node_id = self.graph_store.create_memory_node(memory, self.persona_id)
         memory.node_id = node_id
         
+        # Categorize memory and create topic relationships
+        topic_ids = self.memory_parser.categorize_memory(content)
+        self.memory_parser.link_memory_to_topics(node_id, topic_ids)
+        
         # Store the memory using its timestamp as a key
         memory_key = memory.timestamp.isoformat()
         self.memories[memory_key] = memory
@@ -136,6 +226,11 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         self._create_semantic_relationships(memory)
         
         print(f"Successfully created memory with key: {memory_key}")
+        print("Memory categorized with topics:")
+        for topic_id in topic_ids:
+            topic_path = self.memory_parser.get_topic_path(topic_id)
+            print(f"  - {' -> '.join(topic_path)}")
+        
         return memory
 
     def _create_temporal_relationships(self, memory: Memory):
@@ -195,15 +290,15 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         return result
 
     def search_similar_memories(self, query: str, top_k: int = 3) -> List[Tuple[Memory, float]]:
-        """Search for memories similar to the query text using Neo4j vector similarity search"""
+        """Enhanced memory search combining vector similarity and topic relevance"""
         print(f"\nSearching for memories similar to: {query}")
         
         query_embedding = self.create_embedding(query)
         
-        # Use Neo4j for vector similarity search
-        results = self.graph_store.search_similar_vectors(
-            query_vector=query_embedding,
-            persona_id=self.persona_id,
+        # Use enhanced search with topic awareness
+        results = self.memory_parser.enhance_memory_search(
+            query=query,
+            vector=query_embedding,
             top_k=top_k
         )
         
@@ -219,10 +314,13 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
                 node_id=memory_dict["node_id"]
             )
             similarity = result["similarity"]
-            memory_scores.append((memory, similarity))
-            print(f"Found memory: {memory.content[:100]}... (similarity: {similarity:.4f})")
+            topic_relevance = result["topic_relevance"]
+            combined_score = similarity * 0.7 + topic_relevance * 0.3
+            memory_scores.append((memory, combined_score))
+            print(f"Found memory: {memory.content[:100]}... "
+                  f"(similarity: {similarity:.4f}, topic relevance: {topic_relevance:.4f})")
         
-        return memory_scores
+        return sorted(memory_scores, key=lambda x: x[1], reverse=True)
 
     def clear_memories(self):
         """Clear all memories for this persona from Neo4j"""
@@ -292,107 +390,53 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             return 0.5
 
     def set_mood(self, mood: str):
-        """Set the current mood"""
+        """Set the current mood and update in Neo4j"""
         self.mood = mood
+        self.graph_store.update_persona_state(self.persona_id, mood=mood)
 
     def get_mood(self) -> str:
         """Get the current mood"""
         return self.mood
 
     def set_status(self, status: str):
-        """Set the current status"""
+        """Set the current status and update in Neo4j"""
         self.status = status
+        self.graph_store.update_persona_state(self.persona_id, status=status)
 
     def get_status(self) -> str:
         """Get the current status"""
         return self.status
     
     def _add_to_plans(self, new_plans: list[str]) -> dict:
-        """Add new plans from reflection to existing plans and organize them by time.
-        
-        Args:
-            new_plans: List of new plans to add
-            
-        Returns:
-            dict: Status of the operation with organized plans
-        """
+        """Add new plans and update in Neo4j"""
         try:
             print("🚀 Starting to add new plans...")
-            groq = GroqTool()
-            today = datetime.now().strftime("%Y-%m-%d")
-            print(f"📅 Today's date: {today}")
+            current_plans = self.plans.copy() if isinstance(self.plans, list) else []
             
-            # Convert any old format plans (strings) to new format (dicts)
-            current_plans = []
-            for plan in self.plans:
-                if isinstance(plan, str):
-                    # Convert old string format to new dict format
-                    print(f"🔄 Converting old plan format: {plan}")
-                    current_plans.append({
-                        "plan": plan,
-                        "start_date": today,  # Default to today for old plans
-                        "priority": "medium"  # Default priority
-                    })
-                else:
+            # Ensure new_plans is a list of strings
+            if isinstance(new_plans, str):
+                new_plans = [new_plans]
+            elif not isinstance(new_plans, list):
+                new_plans = list(new_plans)
+            
+            # Add new plans while avoiding duplicates
+            for plan in new_plans:
+                if isinstance(plan, str) and plan not in current_plans:
                     current_plans.append(plan)
             
-            print(f"📋 Current plans after conversion: {current_plans}")
-            print(f"✨ New plans to organize: {new_plans}")
-            
-            # Create prompt to organize plans by time through persona's perspective
-            prompt = f"""Given this persona's profile:
-            {self.persona_profile}
-            
-            And today's date {today}, organize these new plans by when they should be done, considering the persona's preferences, goals and current plans:
-
-            Current plans: {current_plans}
-            New plans to organize: {new_plans}
-            
-            For each new plan, determine:
-            1. When it should start (date in YYYY-MM-DD format) based on the persona's schedule and priorities
-            2. Priority level (high/medium/low) based on alignment with persona's goals
-            
-            Return a JSON array of objects with fields:
-            - plan: The plan text
-            - start_date: Start date
-            - priority: Priority level
-            
-            Only return the JSON array."""
-
-            print("🤖 Sending prompt to Groq...")
-            # Get organized new plans from Groq
-            response = groq.generate_text(prompt, temperature=0.7, model="llama-3.3-70b-versatile")
-            print(f"���� Groq response: {response}")
-            organized_new_plans = json.loads(response)
-            print(f"🎯 Organized new plans: {organized_new_plans}")
-            
-            # Add organized new plans while avoiding duplicates
-            for plan_obj in organized_new_plans:
-                plan_text = plan_obj["plan"]
-                print(f"🔍 Checking for duplicate plan: {plan_text}")
-                # Only add if plan text doesn't already exist
-                if not any(
-                    (isinstance(existing_plan, dict) and existing_plan.get("plan") == plan_text) or
-                    (isinstance(existing_plan, str) and existing_plan == plan_text)
-                    for existing_plan in current_plans
-                ):
-                    print(f"➕ Adding new plan: {plan_obj}")
-                    current_plans.append(plan_obj)
-            
-            # Update self.plans with the merged list
-            self.plans = current_plans
-            print(f"✅ Final plans list: {self.plans}")
+            # Update plans in Neo4j
+            print(f"Updating plans: {current_plans}")
+            self.update_plans(current_plans)
             
             return {
                 "success": True,
-                "message": f"Added and organized {len(new_plans)} new plans",
+                "message": f"Added {len(new_plans)} new plans",
                 "plans": self.plans
             }
-            
         except Exception as e:
             print(f"❌ Error occurred: {str(e)}")
             return {
-                "success": False, 
+                "success": False,
                 "error": str(e)
             }
 
@@ -435,3 +479,79 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             print(f"Found memory: {memory.content[:100]}... (score: {score:.4f})")
         
         return memory_scores
+
+    def get_memories_by_topic(self, topic_name: str, limit: int = 10) -> List[Memory]:
+        """Get memories associated with a specific topic"""
+        # Find topic ID from name
+        topic_id = None
+        for tid, topic in self.memory_parser.topic_hierarchy.topics.items():
+            if topic.name.lower() == topic_name.lower():
+                topic_id = tid
+                break
+        
+        if not topic_id:
+            print(f"Topic '{topic_name}' not found")
+            return []
+        
+        results = self.memory_parser.get_memories_by_topic(topic_id, limit)
+        
+        memories = []
+        for result in results:
+            memory_dict = result["memory"]
+            memory = Memory(
+                content=memory_dict["content"],
+                vector=memory_dict["vector"],
+                importance=memory_dict["importance"],
+                memory_type=MemoryType(memory_dict["memory_type"]),
+                timestamp=datetime.fromisoformat(memory_dict["timestamp"]),
+                node_id=memory_dict["node_id"]
+            )
+            memories.append(memory)
+        
+        return memories
+
+    def get_related_topics(self, topic_name: str, min_strength: float = 0.4) -> List[Tuple[str, float]]:
+        """Get topics related to the given topic name"""
+        # Find topic ID from name
+        topic_id = None
+        for tid, topic in self.memory_parser.topic_hierarchy.topics.items():
+            if topic.name.lower() == topic_name.lower():
+                topic_id = tid
+                break
+        
+        if not topic_id:
+            print(f"Topic '{topic_name}' not found")
+            return []
+        
+        related = self.memory_parser.get_related_topics(topic_id, min_strength)
+        
+        # Convert topic IDs to names
+        named_relations = []
+        for topic_id, strength in related:
+            topic_path = self.memory_parser.get_topic_path(topic_id)
+            named_relations.append((" -> ".join(topic_path), strength))
+        
+        return named_relations
+
+    def update_plans(self, plans: List[str]):
+        """Update plans and save to Neo4j"""
+        # Ensure plans are complete strings
+        self.plans = plans
+        self.graph_store.update_persona_state(self.persona_id, plans=plans)
+
+    def update_goals(self, goals: List[str]):
+        """Update goals and save to Neo4j"""
+        self.goals = goals
+        self.graph_store.update_persona_state(self.persona_id, goals=goals)
+
+    def update_characteristics(self, characteristics: Characteristics):
+        """Update characteristics and save to Neo4j"""
+        self.characteristics = characteristics
+        char_dict = {
+            "mind": characteristics.mind,
+            "body": characteristics.body,
+            "heart": characteristics.heart,
+            "soul": characteristics.soul,
+            "will": characteristics.will
+        }
+        self.graph_store.update_persona_state(self.persona_id, characteristics=char_dict)

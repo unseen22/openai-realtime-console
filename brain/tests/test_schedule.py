@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import pathlib
+from datetime import datetime
 
 # Add parent directory to path to allow absolute imports
 current_dir = pathlib.Path(__file__).parent
@@ -13,12 +14,21 @@ from brain.memory import MemoryType
 from brain.persona_scheduler import PersonaScheduler
 from brain.persona_execute_schedule import PersonaExecuteSchedule
 from brain.persona_reflection import PersonaReflection
+from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.experimental.memory_parcer import MemoryParser
+from brain.embedder import Embedder
 import streamlit as st
-import sqlite3
 import pandas as pd
-from contextlib import contextmanager
 from brain.story_engine.characteristic import Characteristics
 
+# Initialize Neo4j components with cloud instance parameters
+graph = Neo4jGraph(
+    uri="neo4j+s://a9277d8e.databases.neo4j.io",
+    username="neo4j",
+    password="tKSk2m5MwQr9w25IbSnB07KccMmTfjFtjcCsQIraczk"
+)
+embedder = Embedder()
+parser = MemoryParser(neo4j_graph=graph)
 
 persona2 = {
     "name": "Ivan",
@@ -103,101 +113,90 @@ Flaws: Can binge eat when stressed or anxious. Can talk over people when excited
 
 
 # Initialize brain for test persona
-# Try to load existing brain state from file
-brain_state_file = "hanna_brain_state.json"
-if os.path.exists(brain_state_file):
-    with open(brain_state_file, 'r') as f:
-        saved_state = json.load(f)
+try:
+    # Try to load existing persona from Neo4j
     persona_brain = Brain(
         persona_id="hanna",
-        persona_name=persona["name"], 
-        persona_profile=persona["profile_prompt"],
-        db_path="test_memories.db",
-        goals=["Learn to code", "Find out what is the newest Anime hit"],
-        characteristics=Characteristics(
-            mind=saved_state.get('mind', 1),
-            body=saved_state.get('body', 2),
-            heart=saved_state.get('heart', 3),
-            soul=saved_state.get('soul', 1),
-            will=saved_state.get('will', 1)
-        )
+        neo4j_graph=graph
     )
-    persona_brain.mood = saved_state.get('mood', 'neutral')
-    persona_brain.status = saved_state.get('status', 'active')
-    persona_brain.plans = saved_state.get('plans', ["Find newest Anime hit", "Get some good exercise"])
-else:
-    # Create new brain if no saved state exists
+    print("✅ Loaded existing persona from Neo4j")
+except ValueError:
+    # Create new persona if not found
+    print("Creating new persona...")
     persona_brain = Brain(
         persona_id="hanna",
         persona_name=persona["name"],
         persona_profile=persona["profile_prompt"],
-        db_path="test_memories.db",
         characteristics=Characteristics(
             mind=1,
-            body=2, 
+            body=2,
             heart=3,
             soul=1,
             will=1
-        )
+        ),
+        goals=["Learn to code", "Find out what is the newest Anime hit"],
+        neo4j_graph=graph
     )
+    print("✅ Created new persona in Neo4j")
 
-# Save brain state after initialization
-with open(brain_state_file, 'w') as f:
-    json.dump({
-        'mood': persona_brain.mood,
-        'status': persona_brain.status,
-        'plans': persona_brain.plans
-    }, f)
-
-reflection_instance = PersonaReflection()
-execute_schedule = PersonaExecuteSchedule()
+# Initialize reflection instance with Neo4j components
+reflection_instance = PersonaReflection(
+    neo4j_graph=graph,
+    embedder=embedder,
+    parser=parser
+)
+execute_schedule = PersonaExecuteSchedule(neo4j_graph=graph)
 
 # Get and execute the schedule
+print("🎯 Getting schedule ACTIVATED...")
 schedule_result, updated_persona_brain = execute_schedule.get_schedule(persona_brain)
 
-# Only proceed with reflection if schedule was successful
-reflection_result = reflection_instance.reflect_on_day(updated_persona_brain, schedule_result.get("results", []))
-updated_persona_brain.create_memory(reflection_result, MemoryType.REFLECTION)
+# Generate reflection and get plans
+plans = reflection_instance.reflect_on_day(updated_persona_brain)
 
 print("⭐️ going to add to plans")
-updated_persona_brain._add_to_plans(reflection_result["plans"])
-
-# Save updated brain state after reflection and plan updates
-with open(brain_state_file, 'w') as f:
-    json.dump({
-        'mood': updated_persona_brain.mood,
-        'status': updated_persona_brain.status, 
-        'plans': updated_persona_brain.plans
-    }, f)
-
-print(f"❗️❗️❗️ this is the reflection result: {reflection_result} ❗️❗️❗️")
-
-# Create a context manager for database connections
-@contextmanager
-def get_connection():
-    conn = sqlite3.connect("test_memories.db")
-    try:
-        yield conn
-    finally:
-        conn.close()
+updated_persona_brain._add_to_plans(plans)
 
 # Modify the Streamlit section
 st.title("Memory Browser")
 
-# Query memories using the context manager
-with get_connection() as conn:
-    memories_df = pd.read_sql_query("""
-        SELECT timestamp, memory_type, content, importance 
-        FROM memories
-        ORDER BY timestamp DESC
-    """, conn)
-
-# Display memories
-
 st.header(f"PERSONA: {updated_persona_brain.persona_name}")
 
-st.header("Stored Memories")
-st.dataframe(memories_df)
+# Get memories from Neo4j
+try:
+    memories = graph.get_all_memories(persona_id="hanna")
+    if memories:
+        # Convert Neo4j memories to DataFrame
+        memories_data = []
+        for memory in memories:
+            try:
+                memory_dict = memory['memory']
+                memories_data.append({
+                    'timestamp': memory_dict.get('timestamp', ''),
+                    'type': memory_dict.get('type', ''),
+                    'content': memory_dict.get('content', ''),
+                    'importance': memory_dict.get('importance', 0.0),
+                    'emotional_value': memory_dict.get('emotional_value', 0.0)
+                })
+            except Exception as e:
+                print(f"Error processing memory: {e}")
+                continue
+        
+        if memories_data:
+            memories_df = pd.DataFrame(memories_data)
+            # Sort by timestamp if available
+            if 'timestamp' in memories_df.columns:
+                memories_df = memories_df.sort_values('timestamp', ascending=False)
+            
+            st.header("Stored Memories")
+            st.dataframe(memories_df)
+        else:
+            st.write("No valid memories found")
+    else:
+        st.write("No memories found in database")
+except Exception as e:
+    st.error(f"Error retrieving memories: {str(e)}")
+    print(f"Error retrieving memories: {str(e)}")
 
 # Display plans
 st.header("Current Plans") 
@@ -214,3 +213,6 @@ st.write(updated_persona_brain.status)
 
 st.header("Characteristics")
 st.write(updated_persona_brain.characteristics)
+
+# Cleanup Neo4j connection
+graph.close()

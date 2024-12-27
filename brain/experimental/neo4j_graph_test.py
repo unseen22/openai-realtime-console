@@ -8,18 +8,20 @@ import sys
 import pathlib
 from datetime import datetime
 from typing import Dict, List
-from neo4j import GraphDatabase
-from neo4j_graph import Neo4jGraph
 
 # Add parent directory to path to allow imports
 current_dir = pathlib.Path(__file__).parent
 parent_dir = str(current_dir.parent.parent)
 sys.path.append(parent_dir)
 
+# Import local modules
+from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.experimental.memory_parcer import MemoryParser
+
 # Import embedder directly to avoid brain package initialization
 embedder_path = current_dir.parent / 'embedder.py'
 sys.path.append(str(embedder_path.parent))
-from embedder import Embedder
+from brain.embedder import Embedder
 
 # Define memory types enum-like class for testing
 class MemoryType:
@@ -44,133 +46,195 @@ def cleanup_database(graph: Neo4jGraph):
         print(f"Warning during cleanup: {str(e)}")
 
 def test_neo4j_graph():
-    """Test Neo4jGraph functionality"""
+    """Test Neo4j Graph functionality"""
     print("\n=== Starting Neo4j Graph Tests ===")
     
-    # Initialize Neo4j graph store and embedder
-    graph = Neo4jGraph()
-    embedder = Embedder()
-    
     try:
-        # Clean up any existing data
-        cleanup_database(graph)
+        # Initialize Neo4j graph store, embedder, and memory parser
+        print("\nInitializing components...")
+        graph = Neo4jGraph()
+        print("✓ Neo4j graph initialized")
+        
+        embedder = Embedder()
+        print("✓ Embedder initialized")
+        
+        parser = MemoryParser(neo4j_graph=graph)
+        print("✓ Memory parser initialized")
         
         # Test 1: Create Persona
         print("\n1. Testing Persona Creation...")
-        persona = {
-            "id": "hanna_01",
-            "name": "Hanna",
-            "profile": "A test persona for validating graph store functionality"
-        }
-        
-        persona_id = graph.create_persona_node(
-            persona_id=persona["id"],
-            persona_name=persona["name"], 
-            persona_profile=persona["profile"]
-        )
-        print(f"✓ Created persona with ID: {persona_id}")
-        
-        # Test 2: Create Memories
-        print("\n2. Testing Memory Creation...")
-        test_memories = [
-            {
-                "content": "Went for a morning jog in the park today. The fresh air and exercise made me feel energized.",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.7
-            },
-            {
-                "content": "Feeling anxious about the upcoming presentation at work. Need to practice more.",
-                "type": MemoryType.REFLECTION,
-                "importance": 0.8
-            },
-            {
-                "content": "Watched 'The Shawshank Redemption' last night. The story of hope and friendship really moved me.",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.6
-            },
-            {
-                "content": "Tried a new recipe for pasta carbonara. It turned out delicious!",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.5
-            },
-            {
-                "content": "Spent the afternoon painting watercolors. It's so relaxing and helps clear my mind.",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.6
-            },
-            {
-                "content": "Had a deep conversation with my friend about life goals. Feel inspired to make some changes.",
-                "type": MemoryType.REFLECTION,
-                "importance": 0.9
-            },
-            {
-                "content": "Started learning to play the guitar. My fingers hurt but I'm excited about this new hobby.",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.7
-            },
-            {
-                "content": "Feeling grateful for the small things today - good coffee, sunshine, and a quiet moment to read.",
-                "type": MemoryType.REFLECTION,
-                "importance": 0.6
-            },
-            {
-                "content": "Attended a local pottery workshop. Created my first bowl, though it's a bit wonky!",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.5
-            },
-            {
-                "content": "Missing home today. Called family and felt better after catching up with everyone.",
-                "type": MemoryType.REFLECTION,
-                "importance": 0.8
+        try:
+            persona = {
+                "id": "turbo_01",
+                "name": "TURBO",
+                "profile": "A test persona for validating graph store functionality"
             }
-        ]
-        
-        # Create embeddings for all memories
-        print("\nGenerating embeddings for memories...")
-        memory_contents = [memory["content"] for memory in test_memories]
-        memory_vectors = embedder.get_embeddings(memory_contents)
-        
-        memory_ids = []
-        for i, (memory, vector) in enumerate(zip(test_memories, memory_vectors)):
-            memory_id = graph.create_memory_node(
+            
+            persona_id = graph.create_persona_node(
                 persona_id=persona["id"],
-                content=memory["content"],
-                memory_type=memory["type"],
-                importance=memory["importance"],
-                vector=vector,
-                timestamp=datetime.now()
+                persona_name=persona["name"], 
+                persona_profile=persona["profile"]
             )
-            memory_ids.append(memory_id)
-            print(f"✓ Created memory {i+1}/10 with ID: {memory_id}")
+            print(f"✓ Created persona with ID: {persona_id}")
+        except Exception as e:
+            print(f"Error creating persona: {str(e)}")
+            raise
         
-        # Test 3: Query Similar Memories
-        print("\n3. Testing Similar Memory Search...")
-        # Use the first memory's content as query
+        # Test 2: Create Memories with Topic Categorization
+        print("\n2. Testing Memory Creation with Topics...")
+        try:
+            test_memories = [
+                {
+                    "content": "Just finished a challenging yoga session. My body feels both tired and energized.",
+                    "type": MemoryType.OBSERVATION,
+                    "importance": 0.7,
+                    "emotional_value": 0.6
+                },
+                {
+                    "content": "Contemplating my career path and where I want to be in 5 years. Need to set clearer goals.",
+                    "type": MemoryType.REFLECTION,
+                    "importance": 0.9,
+                    "emotional_value": 0.4
+                },
+                {
+                    "content": "Had an amazing sushi dinner with friends. The conversations and laughter made it special.",
+                    "type": MemoryType.OBSERVATION,
+                    "importance": 0.6,
+                    "emotional_value": 0.8
+                },
+                {
+                    "content": "Started reading 'Atomic Habits'. The concepts about building better habits are eye-opening.",
+                    "type": MemoryType.OBSERVATION,
+                    "importance": 0.8,
+                    "emotional_value": 0.5
+                },
+                {
+                    "content": "Explored a new hiking trail today. The view from the summit was breathtaking.",
+                    "type": MemoryType.OBSERVATION,
+                    "importance": 0.7,
+                    "emotional_value": 0.7
+                },
+                {
+                    "content": "Thinking about how much I've grown this past year. Proud of my personal development.",
+                    "type": MemoryType.REFLECTION,
+                    "importance": 0.8,
+                    "emotional_value": 0.6
+                },
+                {
+                    "content": "Attended a virtual photography workshop. Learning about composition and lighting techniques.",
+                    "type": MemoryType.OBSERVATION,
+                    "importance": 0.6,
+                    "emotional_value": 0.5
+                },
+                {
+                    "content": "Feeling overwhelmed with work lately. Need to find better ways to manage stress.",
+                    "type": MemoryType.REFLECTION,
+                    "importance": 0.8,
+                    "emotional_value": -0.3
+                },
+                {
+                    "content": "Volunteered at the local food bank today. Helping others brings such fulfillment.",
+                    "type": MemoryType.OBSERVATION,
+                    "importance": 0.7,
+                    "emotional_value": 0.9
+                },
+                {
+                    "content": "Realizing how important it is to maintain boundaries in relationships. Growth isn't always easy.",
+                    "type": MemoryType.REFLECTION,
+                    "importance": 0.9,
+                    "emotional_value": 0.4
+                }
+            ]
+            
+            # Create embeddings and categorize memories
+            print("\nGenerating embeddings and categorizing memories...")
+            memory_contents = [memory["content"] for memory in test_memories]
+            memory_vectors = embedder.get_embeddings(memory_contents)
+            
+            memory_ids = []
+            for i, (memory, vector) in enumerate(zip(test_memories, memory_vectors)):
+                try:
+                    # Create memory node
+                    memory_id = graph.create_memory_node(
+                        persona_id=persona["id"],
+                        content=memory["content"],
+                        memory_type=memory["type"],
+                        importance=memory["importance"],
+                        emotional_value=memory["emotional_value"],
+                        vector=vector,
+                        timestamp=datetime.now()
+                    )
+                    memory_ids.append(memory_id)
+                    print(f"✓ Created memory {i+1}/10 with ID: {memory_id}")
+                    
+                    # Categorize memory and create topic relationships
+                    topic_ids = parser.categorize_memory(memory["content"])
+                    if topic_ids:
+                        parser.link_memory_to_topics(memory_id, topic_ids)
+                        
+                        # Print topic categorization
+                        print(f"  Topics for memory {i+1}:")
+                        for topic_id in topic_ids:
+                            topic_path = parser.get_topic_path(topic_id)
+                            print(f"    - {' -> '.join(topic_path)}")
+                    else:
+                        print(f"  No topics found for memory {i+1}")
+                except Exception as e:
+                    print(f"Error processing memory {i+1}: {str(e)}")
+                    continue
+        
+        except Exception as e:
+            print(f"Error in memory creation and categorization: {str(e)}")
+            raise
+        
+        # Test 3: Enhanced Memory Search with Topics
+        print("\n3. Testing Enhanced Memory Search...")
         query_text = "Exercise and outdoor activities"
         print(f"Searching for memories similar to: '{query_text}'")
         query_vector = embedder.embed_memory(query_text)
         
-        similar_memories = graph.search_similar_memories(
-            persona_id=persona["id"],
-            query_vector=query_vector,
+        similar_memories = parser.enhance_memory_search(
+            query=query_text,
+            vector=query_vector,
             top_k=3
         )
         
-        print(f"\n✓ Found {len(similar_memories)} similar memories:")
-        for i, memory in enumerate(similar_memories):
-            print(f"\n  {i+1}. Content: {memory['memory']['content']}")
-            print(f"     Similarity: {memory['similarity']:.4f}")
+        print(f"\n✓ Found {len(similar_memories)} relevant memories:")
+        for i, result in enumerate(similar_memories):
+            print(f"\n  {i+1}. Content: {result['memory']['content']}")
+            print(f"     Similarity: {result['similarity']:.4f}")
+            print(f"     Topic Relevance: {result['topic_relevance']:.4f}")
         
-        # Test 4: Get All Memories
-        print("\n4. Testing Get All Memories...")
+        # Test 4: Topic-Based Memory Retrieval
+        print("\n4. Testing Topic-Based Memory Retrieval...")
+        # Get memories for physical activities
+        physical_topic_id = "sub_physical"  # ID for physical activities subcategory
+        physical_memories = parser.get_memories_by_topic(physical_topic_id)
+        
+        print(f"\n✓ Found {len(physical_memories)} memories related to physical activities:")
+        for i, memory in enumerate(physical_memories):
+            print(f"  {i+1}. {memory['memory']['content']}")
+        
+        # Test 5: Related Topics Analysis
+        print("\n5. Testing Related Topics Analysis...")
+        test_topic_id = "sub_physical"  # Physical activities subcategory
+        related_topics = parser.get_related_topics(test_topic_id)
+        
+        print(f"\n✓ Found {len(related_topics)} related topics for 'Physical Activities':")
+        for topic_id, strength in related_topics:
+            topic_path = parser.get_topic_path(topic_id)
+            print(f"  - {' -> '.join(topic_path)} (strength: {strength:.2f})")
+        
+        # Test 6: Get All Memories
+        print("\n6. Testing Get All Memories...")
         all_memories = graph.get_all_memories(persona_id=persona["id"])
         print(f"✓ Retrieved {len(all_memories)} total memories")
         print("Memory contents:")
         for i, memory in enumerate(all_memories):
             print(f"  {i+1}. {memory['memory']['content']}")
         
-        # Test 5: Get Memories by Type
-        print("\n5. Testing Get Memories by Type...")
+        # Test 7: Get Memories by Type
+        print("\n7. Testing Get Memories by Type...")
         observation_memories = graph.get_all_memories_by_type(
             persona_id=persona["id"],
             memory_type=MemoryType.OBSERVATION
@@ -180,8 +244,8 @@ def test_neo4j_graph():
         for i, memory in enumerate(observation_memories):
             print(f"  {i+1}. {memory['memory']['content']}")
         
-        # Test 6: Search Memories by Content
-        print("\n6. Testing Memory Content Search...")
+        # Test 8: Search Memories by Content
+        print("\n8. Testing Memory Content Search...")
         search_content = "feeling"
         content_search = graph.get_all_memories_by_content(
             persona_id=persona["id"],
@@ -200,7 +264,15 @@ def test_neo4j_graph():
     finally:
         # Clean up
         print("\nCleaning up...")
-        graph.close()
+        try:
+            graph.close()
+            print("✓ Neo4j connection closed")
+        except Exception as e:
+            print(f"Error during cleanup: {str(e)}")
 
 if __name__ == "__main__":
-    test_neo4j_graph() 
+    try:
+        test_neo4j_graph()
+    except Exception as e:
+        print(f"\nTest failed: {str(e)}")
+        sys.exit(1) 

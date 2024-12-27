@@ -1,6 +1,5 @@
 from typing import Optional
 from .groq_tool import GroqTool
-from .local_llm import LocalLLM
 from .open_ai_tool import OpenAITool
 from brain.perplexity_tool import PerplexityHandler
 from langsmith import traceable
@@ -29,7 +28,7 @@ class LLMChooser:
             print("\n⚠️ Warning: LANGCHAIN_API_KEY is not set in .env")
             
         self.groq = GroqTool()
-        self.local_llm = LocalLLM(base_url="http://localhost:1234/v1", api_key="lm-studio")
+       
         self.openai = OpenAITool()
         self.perplexity_tool = PerplexityHandler("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")
         self.project_name = LANGCHAIN_PROJECT
@@ -40,13 +39,6 @@ class LLMChooser:
         print(f"Getting LLM client for provider: {provider}")
         if provider.lower() == "groq":
             return self.groq
-        elif provider.lower() == "local":
-            if self.local_llm is None:
-                self.local_llm = LocalLLM(
-                    base_url="http://localhost:1234/v1",
-                    api_key="lm-studio"
-                )
-            return self.local_llm
         elif provider.lower() == "openai":
             if not hasattr(self, 'openai'):
                 self.openai = OpenAITool()
