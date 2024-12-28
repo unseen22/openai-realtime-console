@@ -5,6 +5,8 @@ from brain.perplexity_tool import PerplexityHandler
 from brain.llm_chooser import LLMChooser
 from datetime import datetime
 from langsmith import traceable
+from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.experimental.persona_class import Persona
 
 class PersonaScheduler:
     def __init__(self):
@@ -12,10 +14,11 @@ class PersonaScheduler:
         self.groq = GroqTool()
         self.perplexity = PerplexityHandler(api_key="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")
         self.llm_chooser = LLMChooser()
+        self.graph = Neo4jGraph()
         print("✅ PersonaScheduler initialized successfully")
 
     @traceable
-    def get_plans(self, persona):
+    async def get_plans(self, persona, memories):
         """Evaluate and prioritize plans for the persona based on their profile.
         
         Args:
@@ -27,6 +30,12 @@ class PersonaScheduler:
         print("\n🔍 GETTING PLANS FOR PERSONA...")
         try:
             plans = persona.plans
+            if not plans:
+                print("⚠️ No plans found for persona")
+                return {
+                    "success": False,
+                    "error": "No plans found for persona"
+                }
             print(f"📋 Retrieved {len(plans)} plans")
         except Exception as e:
             print(f"❌ Error getting plans: {str(e)}")
@@ -34,21 +43,14 @@ class PersonaScheduler:
                 "success": False,
                 "error": f"Failed to get plans: {str(e)}"
             }
-
-        if not plans:
-            print("⚠️ No plans found for persona")
-            return {
-                "success": False,
-                "error": "No plans found for persona"
-            }
         
         print("\n=== PERSONA DETAILS ===")
-        print(f"👤 Profile: {persona.persona_profile}")
+        print(f"👤 Profile: {persona.profile}")
         print(f"📝 Plans: {json.dumps(plans, indent=2)}")
-        print(f"📜 Recent history: {[memory.content for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-3:]}")
+        print(f"📜 Recent history: {memories}")
         
         plans_prompt = f"""Given this persona's profile:
-        {persona.persona_profile}
+        {persona.profile}
         Take into account the goals of this persona:
         {persona.goals}
         And these current plans:
@@ -56,7 +58,7 @@ class PersonaScheduler:
         This is the current date:
         {datetime.now().strftime("%Y-%m-%d")}
         And these recent history:
-        {[{"content": memory.content, "timestamp": memory.timestamp} for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-3:]}
+        {memories}
 
         Please evaluate which plans are most important to prioritize today. Consider:
         1. Urgency and time-sensitivity
@@ -69,10 +71,9 @@ class PersonaScheduler:
         2. Brief explanation for each priority
         """
 
-
         print(f"🤖 Requesting plan priorities from LLM...THIS IS THE PROMPT: {plans_prompt}")
         try:
-            response = self.llm_chooser.generate_text(
+            response = await self.llm_chooser.generate_text(
                 provider="openai",
                 prompt=plans_prompt,
                 model="gpt-4o",
@@ -98,17 +99,17 @@ class PersonaScheduler:
             }
 
     @traceable
-    def create_daily_schedule(self, persona):
+    async def create_daily_schedule(self, persona, memories):
         print("\n📅 CREATING DAILY SCHEDULE...")
-        plans_result = self.get_plans(persona)
+        plans_result = await self.get_plans(persona, memories)
         plans_to_use = plans_result.get("plans", []) if plans_result.get("success", False) else []
         print(f"📋 Using plans: {json.dumps(plans_to_use, indent=2)}")
         
         groq_prompt = f"""
         Generate a daily schedule for a persona, take into account the persona's profile and recent history and the plans to do today.
-        Persona Profile: {persona.persona_profile}
+        Persona Profile: {persona.profile}
         Take into account the goals of this persona: {persona.goals}
-        These are the recent exeriences: {[{"content": memory.content, "timestamp": memory.timestamp} for memory in persona.memories.values() if memory.memory_type == MemoryType.REFLECTION][-10:]}
+        These are the recent exeriences: {memories}
 
         Plans to do: {plans_to_use}
       
@@ -130,7 +131,7 @@ class PersonaScheduler:
         """
         print("\n🤖 Requesting schedule from LLM...")
         try:
-            response = self.llm_chooser.generate_text(
+            response = await self.llm_chooser.generate_text(
                 provider="openai",
                 prompt=groq_prompt,
                 model="gpt-4o",
@@ -151,7 +152,7 @@ class PersonaScheduler:
             print(f"❌ Unexpected error: {str(e)}")
             return {"error": "Failed to generate schedule"}
 
-    def persona_scheduler(self, persona):
+    async def persona_scheduler(self, persona, memories):
         """
         Generate a daily schedule and activities for a persona using LLM.
         
@@ -164,10 +165,10 @@ class PersonaScheduler:
         print("\n🎯 GENERATING PERSONA SCHEDULE...")
         try:
             print("📅 Creating base schedule...")
-            schedule, plans_result = self.create_daily_schedule(persona)
+            schedule, plans_result = await self.create_daily_schedule(persona, memories)
             
             print("🔄 Modernizing activities...")
-            schedule = self.modernize_activities(schedule, persona, plans_result)
+            schedule = await self.modernize_activities(schedule, persona, plans_result, memories)
             
             print("✅ Schedule generation complete")
             return {
@@ -187,7 +188,7 @@ class PersonaScheduler:
         return schedule
 
     @traceable
-    def modernize_activities(self, schedule, persona, plans_result):
+    async def modernize_activities(self, schedule, persona, plans_result, memories):
         print("\n🔄 MODERNIZING ACTIVITIES...")
         if isinstance(schedule, dict) and "error" in schedule:
             print("⚠️ Schedule contains error - skipping modernization")
@@ -210,70 +211,90 @@ class PersonaScheduler:
             Return a list of only the suggested activity names in order, one per line.
             """
             
+            modern_suggestions = []
             try:
                 print("🤖 Getting modern suggestions from Perplexity...")
-                modern_suggestions = self.perplexity.generate_completion(
+                response = self.perplexity.generate_completion(
                     messages=[{"role": "user", "content": modern_activity_prompt}],
                     model="llama-3.1-sonar-huge-128k-online",
                     temperature=0.7
-                ).split("\n")
-                print(f"✨ Modern suggestions:\n{json.dumps(modern_suggestions, indent=2)}")
-                
-                for task, suggestion in zip(schedule["schedule"], modern_suggestions):
-                    if suggestion.strip():
-                        task["activity"] = suggestion.strip()
-                        print(f"📝 Updated activity: {task['time']} -> {suggestion.strip()}")
+                )
+                if isinstance(response, str):
+                    modern_suggestions = response.split("\n")
+                    print(f"✨ Modern suggestions:\n{json.dumps(modern_suggestions, indent=2)}")
+                    
+                    for task, suggestion in zip(schedule["schedule"], modern_suggestions):
+                        if suggestion.strip():
+                            task["activity"] = suggestion.strip()
+                            print(f"📝 Updated activity: {task['time']} -> {suggestion.strip()}")
+
+                    print("\n🔄 Finalizing schedule with modern activities...")
+                    groq_prompt = f"""
+                    Given this schedule with modernized activities:
+                    {schedule_str}
+                    
+                    And this persona profile:
+                    {persona.profile}
+
+                    And this persona earlier activities:
+                    {memories}
+                    Change the shedule according to this feedback:
+                    {modern_suggestions}
+                    
+                    Also remember the persona's general goals:
+                    {persona.goals}
+
+                    And the plans to do today:
+                    {plans_result}
+
+
+                    Return only a JSON object with the same schedule structure but with the modernized activities.
+                    The schedule should have:
+                    - success: true
+                    - schedule: array of tasks with time and activity fields
+                    """
+                    
+                    try:
+                        print("��� Getting final schedule from LLM...")
+                        response = await self.llm_chooser.generate_text(
+                            provider="openai",
+                            messages=[{"role": "user", "content": groq_prompt}],
+                            model="gpt-4o", 
+                            temperature=0.1,
+                            max_tokens=1024,
+                            response_format={"type": "json_object"}
+                        )
+                        
+                        schedule = json.loads(response)
+                        print("✅ Successfully updated schedule with modern activities")
+                        
+                    except Exception as e:
+                        print(f"❌ Error updating schedule: {str(e)}")
+                        print("👉 Keeping previous schedule version")
+                else:
+                    print("⚠️ Invalid response format from Perplexity")
+                    print("👉 Keeping original activities")
+
             except Exception as e:
                 print(f"⚠️ Error getting modern suggestions: {str(e)}")
                 print("👉 Keeping original activities")
-                pass
 
-            print("\n🔄 Finalizing schedule with modern activities...")
-            groq_prompt = f"""
-            Given this schedule with modernized activities:
-            {schedule_str}
-            
-            And this persona profile:
-            {persona.persona_profile}
+            print(f"\n📅 FINAL SCHEDULE:\n{json.dumps(schedule, indent=2)}")
+            return schedule
+        
+    async def create_full_schedule_and_save(self, persona_id):
+        persona_node = self.graph.get_persona_state(persona_id=persona_id)
+        memories = self.graph.get_persona_memories(persona_id=persona_id, limit=3)
+        persona = Persona(persona_node)
 
-            And this persona earlier activities:
-            {[memory.content for memory in persona.memories.values()][-5:] if persona.memories else "Nothing"}
+        schedule_result = await self.persona_scheduler(persona, memories)
+        
+        # Extract the actual schedule array if successful
+        schedule_data = schedule_result.get("schedule", {}).get("schedule", []) if schedule_result.get("success") else []
+        
+        # Convert schedule items to strings in the format "time: activity"
+        formatted_schedule = [f"{item['time']}: {item['activity']}" for item in schedule_data]
+        
+        self.graph.update_persona_state(persona_id=persona_id, schedule=formatted_schedule)
 
-            Change the shedule according to this feedback:
-            {modern_suggestions}
-            
-            Also remember the persona's general goals:
-            {persona.goals}
-
-            And the plans to do today:
-            {plans_result}
-
-
-            Return only a JSON object with the same schedule structure but with the modernized activities.
-            The schedule should have:
-            - success: true
-            - schedule: array of tasks with time and activity fields
-            """
-            
-            try:
-                print("🤖 Getting final schedule from LLM...")
-                schedule = self.llm_chooser.generate_text(
-                    provider="openai",
-                    messages=[{"role": "user", "content": groq_prompt}],
-                    model="gpt-4o", 
-                    temperature=0.1,
-                    max_tokens=1024,
-                    response_format={"type": "json_object"}
-                )
-                
-                schedule = json.loads(schedule)
-                print("✅ Successfully updated schedule with modern activities")
-                
-            except Exception as e:
-                print(f"❌ Error updating schedule: {str(e)}")
-                print("👉 Keeping previous schedule version")
-                pass
-
-        print(f"\n📅 FINAL SCHEDULE:\n{json.dumps(schedule, indent=2)}")
-        return schedule
 

@@ -45,7 +45,7 @@ class PersonaExecuteSchedule:
             print(f"❌ Error closing Neo4j connection: {str(e)}")
         
     @traceable
-    def get_schedule(self, persona):
+    async def get_schedule(self, persona):
         """
         Process and execute tasks from the provided schedule.
         
@@ -60,7 +60,7 @@ class PersonaExecuteSchedule:
             # Create new schedule using PersonaScheduler
             print("🎯 Creating new schedule...")
             persona_scheduler = PersonaScheduler()
-            schedule_result = persona_scheduler.persona_scheduler(persona)
+            schedule_result = await persona_scheduler.persona_scheduler(persona)
             
             if not schedule_result.get("success"):
                 print("❌ Failed to generate schedule")
@@ -80,9 +80,9 @@ class PersonaExecuteSchedule:
             updated_persona = persona
             
             if "schedule" in schedule_data and len(schedule_data["schedule"]) > 0:
-                schedule_items = schedule_data["schedule"]  # Only take items 2-4
+                schedule_items = schedule_data["schedule"][2:4]  # Only take items 2-4
                 for i, task in enumerate(schedule_items):  # Start enumeration from 2
-                    self.current_task_index = i
+                    self.current_task_index = i + 2
                     time_slot = task["time"]
                     activity = task["activity"] 
                     print(f"\n🎯 Executing task {i+1}/{len(schedule_data['schedule'])} for {time_slot}: {activity}")

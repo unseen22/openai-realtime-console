@@ -164,7 +164,7 @@ class Neo4jGraph:
         record = result.single()
         return str(record["node_id"])
     
-    def create_persona_node(self, persona_id: str, persona_name: str, persona_profile: str, 
+    async def create_persona_node(self, persona_id: str, persona_name: str, persona_profile: str, 
                          characteristics: Optional[Dict[str, int] | 'Characteristics'] = None) -> str:
         """Create a persona node in the graph
         
@@ -206,7 +206,8 @@ class Neo4jGraph:
                     "mood: $mood, "
                     "status: $status, "
                     "plans: $plans, "
-                    "goals: $goals"
+                    "goals: $goals, "
+                    "schedule: $schedule"
                     "}) "
                     "RETURN elementId(p) as node_id",
                     persona_id=persona_id,
@@ -220,7 +221,8 @@ class Neo4jGraph:
                     mood="neutral",
                     status="active",
                     plans=[],
-                    goals=[]
+                    goals=[],
+                    schedule=[]
                 ).single()
             )
             return result["node_id"]
@@ -245,6 +247,29 @@ class Neo4jGraph:
             }
         } for record in result]
     
+
+    def get_persona_memories(self, persona_id: str, limit: int = 3) -> List[Dict]:
+        """Get the last 3 memory nodes attached to this persona"""
+        with self.driver.session() as session:
+            return session.execute_read(
+                self._get_persona_memories,
+                persona_id=persona_id,
+                limit=limit
+            )
+        
+
+    @staticmethod
+    def _get_persona_memories(tx, persona_id: str, limit: int) -> List[Dict]:
+        """Transaction function to get the last 3 memory nodes attached to this persona"""
+        query = (
+            "MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m:Memory) "
+            "RETURN m, elementId(m) as node_id "
+            "ORDER BY m.timestamp DESC "
+            "LIMIT $limit"
+        )
+        result = tx.run(query, persona_id=persona_id, limit=limit)
+        return [{"memory": dict(record["m"]), "node_id": record["node_id"]} for record in result]
+
     def get_all_memories_by_type(self, persona_id: str, memory_type: str) -> List[Dict]:
         """Get all memories of a specific type for a specific persona"""
         with self.driver.session() as session:
@@ -398,7 +423,8 @@ class Neo4jGraph:
 
     def update_persona_state(self, persona_id: str, mood: str = None, status: str = None, 
                            plans: List[str] = None, goals: List[str] = None,
-                           characteristics: Optional[Dict[str, int] | 'Characteristics'] = None) -> None:
+                           characteristics: Optional[Dict[str, int] | 'Characteristics'] = None,
+                           schedule: List[str] = None) -> None:
         """Update persona state in Neo4j
         
         Args:
@@ -408,7 +434,12 @@ class Neo4jGraph:
             plans: List of current plans (as complete strings)
             goals: List of current goals
             characteristics: Either a Characteristics object or a dict with mind, body, heart, soul, will values
+            schedule: List of current schedule items (as complete strings)
         """
+        # Initialize set_clauses and params at the start
+        set_clauses = []
+        params = {"persona_id": persona_id}
+
         # Convert Characteristics object to dict if needed
         char_dict = None
         if characteristics is not None:
@@ -429,28 +460,90 @@ class Neo4jGraph:
         if plans is not None:
             if isinstance(plans, str):
                 plans = [plans]
-            plans = [str(plan) for plan in plans if plan]  # Convert all items to strings and filter empty ones
+            # Get existing plans from Neo4j
+            existing_plans = []
+            with self.driver.session() as session:
+                result = session.run(
+                    "MATCH (p:Persona {id: $persona_id}) RETURN p.plans as plans",
+                    persona_id=persona_id
+                )
+                record = result.single()
+                if record and record["plans"]:
+                    existing_plans = record["plans"]
+            
+            # Convert new plans to strings and filter empty ones
+            new_plans = [str(plan) for plan in plans if plan]
+            
+            # Combine existing and new plans
+            plans = existing_plans + new_plans
+            plans = [plan for plan in plans if plan]
+            # Add plans to set_clauses and params
+            set_clauses.append("p.plans = $plans")
+            params["plans"] = list(plans)
 
         if goals is not None:
             if isinstance(goals, str):
                 goals = [goals]
             goals = [str(goal) for goal in goals if goal]  # Convert all items to strings and filter empty ones
+            # Add goals to set_clauses and params
+            set_clauses.append("p.goals = $goals")
+            params["goals"] = list(goals)
+     
+        # Handle schedule similar to plans and goals
+        if schedule is not None:
+            if isinstance(schedule, str):
+                schedule = [schedule]
+            # Convert each schedule item to string and filter empty ones
+            schedule = [str(item) for item in schedule if item]
+            # Replace existing schedule instead of appending
+            set_clauses.append("p.schedule = $schedule")
+            params["schedule"] = list(schedule)  # Convert to list to ensure it's an array in Neo4j
 
-        with self.driver.session() as session:
-            session.execute_write(
-                self._update_persona_state_tx,
-                persona_id=persona_id,
-                mood=mood,
-                status=status,
-                plans=plans,
-                goals=goals,
-                characteristics=char_dict
-            )
+        if mood is not None:
+            set_clauses.append("p.mood = $mood")
+            params["mood"] = mood
+
+        if status is not None:
+            set_clauses.append("p.status = $status")
+            params["status"] = status
+
+        if characteristics is not None:
+            # Store characteristics as individual properties
+            if "mind" in characteristics:
+                set_clauses.append("p.mind = $mind")
+                params["mind"] = characteristics["mind"]
+            if "body" in characteristics:
+                set_clauses.append("p.body = $body")
+                params["body"] = characteristics["body"]
+            if "heart" in characteristics:
+                set_clauses.append("p.heart = $heart")
+                params["heart"] = characteristics["heart"]
+            if "soul" in characteristics:
+                set_clauses.append("p.soul = $soul")
+                params["soul"] = characteristics["soul"]
+            if "will" in characteristics:
+                set_clauses.append("p.will = $will")
+                params["will"] = characteristics["will"]
+
+        # Only execute the update if there are changes to make
+        if set_clauses:
+            with self.driver.session() as session:
+                session.execute_write(
+                    self._update_persona_state_tx,
+                    persona_id=persona_id,
+                    mood=mood,
+                    status=status,
+                    plans=plans,
+                    goals=goals,
+                    characteristics=char_dict,
+                    schedule=schedule
+                )
 
     @staticmethod
     def _update_persona_state_tx(tx, persona_id: str, mood: str = None, status: str = None, 
                                 plans: List[str] = None, goals: List[str] = None,
-                                characteristics: Dict[str, int] = None) -> None:
+                                characteristics: Dict[str, int] = None,
+                                schedule: List[str] = None) -> None:
         """Transaction function to update persona state"""
         # Build dynamic SET clause based on provided values
         set_clauses = []
@@ -488,6 +581,10 @@ class Neo4jGraph:
                 set_clauses.append("p.will = $will")
                 params["will"] = characteristics["will"]
             
+        if schedule is not None:
+            set_clauses.append("p.schedule = $schedule")
+            params["schedule"] = list(schedule)
+
         if set_clauses:
             query = (
                 "MATCH (p:Persona {id: $persona_id}) "
@@ -506,6 +603,30 @@ class Neo4jGraph:
         """
         with self.driver.session() as session:
             return session.execute_read(self._get_persona_state_tx, persona_id=persona_id)
+
+    async def check_persona_exists(self, persona_id: str) -> bool:
+        """Check if a persona exists in Neo4j
+        
+        Args:
+            persona_id: ID of the persona to check
+            
+        Returns:
+            bool: True if the persona exists, False otherwise
+        """
+        with self.driver.session() as session:
+            result = session.execute_read(self._check_persona_exists_tx, persona_id=persona_id)
+            return result
+
+    @staticmethod
+    def _check_persona_exists_tx(tx, persona_id: str) -> bool:
+        """Transaction function to check if a persona exists"""
+        query = (
+            "MATCH (p:Persona {id: $persona_id}) "
+            "RETURN COUNT(p) > 0 as exists"
+        )
+        result = tx.run(query, persona_id=persona_id)
+        record = result.single()
+        return record["exists"]
 
     @staticmethod
     def _get_persona_state_tx(tx, persona_id: str) -> Dict:
@@ -528,6 +649,7 @@ class Neo4jGraph:
             "status": persona.get("status", "active"),
             "plans": persona.get("plans", []),
             "goals": persona.get("goals", []),
+            "schedule": persona.get("schedule", []),
             "characteristics": {
                 "mind": persona.get("mind", 0),
                 "body": persona.get("body", 0),

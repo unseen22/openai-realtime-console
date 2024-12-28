@@ -56,9 +56,9 @@ async def search_memories_by_topic(topic: str, persona_id: str = "hanna"):
             print(f"\nMemory Content: {memory['memory']['content'][:100]}...")
             print(f"Memory Type: {memory['memory'].get('type', 'unknown')}")
             print(f"Timestamp: {memory['memory']['timestamp']}")
-            print(f"Similarity Score: {memory['similarity']:.4f}")
-            print(f"Topic Relevance: {memory['topic_relevance']:.4f}")
-            print(f"Keyword Relevance: {memory['keyword_relevance']:.4f}")
+            print(f"Similarity Score: {memory.get('similarity', 'N/A') if memory.get('similarity') is None else f'{memory['similarity']:.4f}'}")
+            print(f"Topic Relevance: {memory.get('topic_relevance', 'N/A') if memory.get('topic_relevance') is None else f'{memory['topic_relevance']:.4f}'}")
+            print(f"Keyword Relevance: {memory.get('keyword_relevance', 'N/A') if memory.get('keyword_relevance') is None else f'{memory['keyword_relevance']:.4f}'}")
             print("-" * 50)
         
         print("\n=== Search Complete ===")
@@ -74,15 +74,29 @@ if __name__ == "__main__":
     search_topics = [
         "What did you watch?",
         "Life is so hard.",
-        "I just lost all my crypto."
+        "I just lost all my investment."
     ]
     
     async def main():
+        persona_exists = await graph.check_persona_exists(persona_id="hanna")
+        if not persona_exists:
+            print(f"Persona with id 'hanna' does not exist. Creating persona...")
+            await graph.create_persona_node(
+                persona_id="hanna", 
+                persona_name="Hanna",
+                persona_profile="A young woman exploring life's ups and downs"
+            )
+            print("✓ Created persona 'hanna'")
+        else:
+            print("Persona 'hanna' already exists")
+            
         for topic in search_topics:
             await search_memories_by_topic(topic)
             print("\n" + "="*70 + "\n")  # Separator between searches
 
         # Create memory with vector embedding and topic categorization
+        
+
         memory_content = "I just lost all my Bitcoin. And invested a bunch of money in a new AI company and lost it all. And now Im borke and just hava a few etherium left."
         memory_vector = await embedder.embed_memory(memory_content)
         memory_id = await graph.create_memory_node(
