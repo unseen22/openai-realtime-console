@@ -80,8 +80,8 @@ class PersonaExecuteSchedule:
             updated_persona = persona
             
             if "schedule" in schedule_data and len(schedule_data["schedule"]) > 0:
-                schedule_items = schedule_data["schedule"][2:3]  # Only take items 2-4
-                for i, task in enumerate(schedule_items, start=2):  # Start enumeration from 2
+                schedule_items = schedule_data["schedule"]  # Only take items 2-4
+                for i, task in enumerate(schedule_items):  # Start enumeration from 2
                     self.current_task_index = i
                     time_slot = task["time"]
                     activity = task["activity"] 

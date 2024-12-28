@@ -47,22 +47,22 @@ class LLMChooser:
             raise ValueError(f"Unknown LLM provider: {provider}")
             
     @traceable(project_name=os.getenv("LANGCHAIN_PROJECT", "openai-realtime-console"))
-    def generate_text(self, provider="openai", **kwargs):
+    async def generate_text(self, provider="openai", **kwargs):
         """Generate text using the specified provider with tracing enabled."""
         print(f"Generating text with {provider} (traced) in project: {self.project_name}")
         try:
             if provider == "openai":
                 print("Using OpenAI with tracing")
                 kwargs["langsmith_extra"] = {"project_name": self.project_name}
-                return self.openai.generate_text(**kwargs)
+                return await self.openai.generate_text(**kwargs)
             elif provider == "groq":
                 print("Using Groq with tracing")
                 #kwargs["langsmith_extra"] = {"project_name": self.project_name}
-                return self.groq.generate_text(**kwargs)
+                return await self.groq.generate_text(**kwargs)
             elif provider == "perplexity":
                 print("Using Perplexity with tracing")
                 kwargs["langsmith_extra"] = {"project_name": self.project_name}
-                return self.perplexity_tool.generate_text(**kwargs)
+                return await self.perplexity_tool.generate_text(**kwargs)
             else:
                 raise ValueError(f"Unknown provider: {provider}")
         except Exception as e:

@@ -5,6 +5,9 @@ import pathlib
 from datetime import datetime
 from typing import Dict, List
 from neo4j import GraphDatabase
+from dotenv import load_dotenv
+import asyncio
+load_dotenv()
 
 # Add parent directory to path to allow absolute imports
 current_dir = pathlib.Path(__file__).parent
@@ -12,105 +15,88 @@ parent_dir = str(current_dir.parent.parent)
 sys.path.append(parent_dir)
 
 from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.embedder import Embedder
+from brain.experimental.memory_parcer import MemoryParser
 
 # Define memory types enum-like class for testing
 class MemoryType:
     OBSERVATION = "observation"
     REFLECTION = "reflection"
     CONVERSATION = "conversation"
+    EXPERIENCE = "experience"
 
-def test_neo4j_graph():
-    """Test Neo4jGraph functionality"""
-    print("\n=== Starting Neo4j Graph Tests ===")
+
+graph = Neo4jGraph(
+        username=os.getenv("NEO4J_USER"),
+        password=os.getenv("NEO4J_PASSWORD"), 
+        uri=os.getenv("NEO4J_URI")
+    )
+embedder = Embedder()
+memory_parser = MemoryParser(graph)
+
+async def search_memories_by_topic(topic: str, persona_id: str = "hanna"):
+    """Search for topic-related memories for a persona"""
+    print(f"\n=== Searching {topic} Memories for {persona_id} ===")
     
-    # Initialize Neo4j graph store with test credentials
-    graph = Neo4jGraph()
+    # Initialize Neo4j graph store and embedder
+    
     
     try:
-        # Test 1: Create Persona
-        print("\n1. Testing Persona Creation...")
-        persona = {
-            "id": "test_persona",
-            "name": "Test Persona",
-            "profile": "A test persona for validating graph store functionality"
-        }
+        # Use enhanced search with topic awareness
+        print(f"\nSearching for {topic}-related memories...")
         
-        persona_id = graph.create_persona_node(
-            persona_id=persona["id"],
-            persona_name=persona["name"], 
-            persona_profile=persona["profile"]
-        )
-        print(f"Created persona with ID: {persona_id}")
-        
-        # Test 2: Create Memories
-        print("\n2. Testing Memory Creation...")
-        test_memories = [
-            {
-                "content": f"Test memory {i}",
-                "type": MemoryType.OBSERVATION,
-                "importance": 0.5,
-                "vector": [0.1 * i for i in range(10)]  # Simple test vectors
-            }
-            for i in range(5)
-        ]
-        
-        memory_ids = []
-        for memory in test_memories:
-            memory_id = graph.create_memory_node(
-                persona_id=persona["id"],
-                content=memory["content"],
-                memory_type=memory["type"],
-                importance=memory["importance"],
-                vector=memory["vector"],
-                timestamp=datetime.now()
-            )
-            memory_ids.append(memory_id)
-            print(f"Created memory with ID: {memory_id}")
-        
-        # Test 3: Query Similar Memories
-        print("\n3. Testing Similar Memory Search...")
-        query_vector = [0.1 * i for i in range(10)]
-        similar_memories = graph.search_similar_memories(
-            persona_id=persona["id"],
-            query_vector=query_vector,
+        memories = await memory_parser.enhance_memory_search(
+            query=topic,
+            persona_id=persona_id,
             top_k=3
         )
         
-        print(f"Found {len(similar_memories)} similar memories:")
-        for memory in similar_memories:
-            print(f"Memory: {memory['memory']['content']}, Similarity: {memory['similarity']}")
+        print(f"\nFound {len(memories)} memories:")
+        for memory in memories:
+            print(f"\nMemory Content: {memory['memory']['content'][:100]}...")
+            print(f"Memory Type: {memory['memory'].get('type', 'unknown')}")
+            print(f"Timestamp: {memory['memory']['timestamp']}")
+            print(f"Similarity Score: {memory['similarity']:.4f}")
+            print(f"Topic Relevance: {memory['topic_relevance']:.4f}")
+            print(f"Keyword Relevance: {memory['keyword_relevance']:.4f}")
+            print("-" * 50)
         
-        # Test 4: Get All Memories
-        print("\n4. Testing Get All Memories...")
-        all_memories = graph.get_all_memories(persona_id=persona["id"])
-        print(f"Retrieved {len(all_memories)} total memories")
-        
-        # Test 5: Get Memories by Type
-        print("\n5. Testing Get Memories by Type...")
-        observation_memories = graph.get_all_memories_by_type(
-            persona_id=persona["id"],
-            memory_type=MemoryType.OBSERVATION
-        )
-        print(f"Retrieved {len(observation_memories)} observation memories")
-        
-        # Test 6: Search Memories by Content
-        print("\n6. Testing Memory Content Search...")
-        content_search = graph.get_all_memories_by_content(
-            persona_id=persona["id"],
-            content="Test memory 1"
-        )
-        print(f"Found {len(content_search)} memories matching content search")
-        
-        print("\n=== All Tests Completed Successfully ===")
-        
+        print("\n=== Search Complete ===")
     except Exception as e:
-        print(f"\nError during testing: {str(e)}")
+        print(f"\nError during search: {str(e)}")
         raise
     
     finally:
-        # Clean up
-        print("\nCleaning up...")
         graph.close()
 
 if __name__ == "__main__":
-    test_neo4j_graph()
+    # Example search queries
+    search_topics = [
+        "What did you watch?",
+        "Life is so hard.",
+        "I just lost all my crypto."
+    ]
+    
+    async def main():
+        for topic in search_topics:
+            await search_memories_by_topic(topic)
+            print("\n" + "="*70 + "\n")  # Separator between searches
+
+        # Create memory with vector embedding and topic categorization
+        memory_content = "I just lost all my Bitcoin. And invested a bunch of money in a new AI company and lost it all. And now Im borke and just hava a few etherium left."
+        memory_vector = await embedder.embed_memory(memory_content)
+        memory_id = await graph.create_memory_node(
+            content=memory_content,
+            memory_type=MemoryType.EXPERIENCE,  # OBSERVATION is defined in test file
+            vector=memory_vector,
+            importance=0.8,
+            emotional_value=-0.7,
+            persona_id="hanna"
+        )
+        
+        # Categorize and link to topics
+        topic_ids = await memory_parser.categorize_memory(memory_content)
+        memory_parser.link_memory_to_topics(memory_id, topic_ids)
+
+    # Run the async main function
+    asyncio.run(main())

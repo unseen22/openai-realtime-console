@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from neo4j import GraphDatabase
 from brain.memory import Memory, MemoryType
+from .keyword_extractor import KeywordExtractor
 
 class Neo4jGraph:
     def __init__(self, uri: str = "neo4j+s://a9277d8e.databases.neo4j.io", 
@@ -15,6 +16,8 @@ class Neo4jGraph:
                 session.run("RETURN 1")
             print("✅ Successfully connected to Neo4j database")
             self._setup_indexes()
+            # Initialize KeywordExtractor for keyword extraction
+            self.keyword_extractor = KeywordExtractor()
         except Exception as e:
             print(f"❌ Failed to connect to Neo4j: {str(e)}")
             raise
@@ -75,9 +78,10 @@ class Neo4jGraph:
         """Close the Neo4j driver connection"""
         self.driver.close()
 
-    def create_memory_node(self, persona_id: str, content: str, memory_type: str | MemoryType, importance: float = 0.0,
+    async def create_memory_node(self, persona_id: str, content: str, memory_type: str | MemoryType, importance: float = 0.0,
                            emotional_value: float = 0.0, vector: Optional[List[float]] = None, 
-                           timestamp: Optional[datetime] = None, mood: str = "neutral") -> str:
+                           timestamp: Optional[datetime] = None, mood: str = "neutral", 
+                           keywords: Optional[List[str]] = None) -> str:
         """Create a memory node in Neo4j and connect it to persona
         
         Args:
@@ -89,6 +93,8 @@ class Neo4jGraph:
             vector: Optional embedding vector for the memory content
             timestamp: Optional timestamp for when the memory was created
             mood: Current mood when memory was created
+            keywords: Optional list of keywords associated with the memory. If not provided,
+                     they will be automatically extracted from the content.
             
         Returns:
             str: ID of the created memory node
@@ -96,6 +102,14 @@ class Neo4jGraph:
         # Convert memory_type to string if it's an enum
         if isinstance(memory_type, MemoryType):
             memory_type = memory_type.value
+
+        # Extract keywords if not provided
+        if keywords is None:
+            try:
+                keywords = await self.keyword_extractor.extract_keywords(content)
+            except Exception as e:
+                print(f"Warning: Failed to extract keywords: {str(e)}")
+                keywords = []
 
         with self.driver.session() as session:
             result = session.execute_write(
@@ -107,13 +121,14 @@ class Neo4jGraph:
                 emotional_value=emotional_value,
                 vector=vector,
                 timestamp=timestamp or datetime.now(),
-                mood=mood
+                mood=mood,
+                keywords=keywords
             )
             return result
 
     def _create_memory_node_tx(self, tx, persona_id: str, content: str, memory_type: str, importance: float,
                            emotional_value: float, vector: Optional[List[float]], timestamp: datetime,
-                           mood: str) -> str:
+                           mood: str, keywords: List[str]) -> str:
         """Transaction function to create a memory node and establish relationships"""
         # Create memory node
         query = (
@@ -127,6 +142,7 @@ class Neo4jGraph:
             "vector: $vector, "
             "timestamp: $timestamp, "
             "mood: $mood, "
+            "keywords: $keywords, "
             "node_type: 'memory'"
             "}) "
             "CREATE (p)-[r:HAS_MEMORY]->(m) "
@@ -142,7 +158,8 @@ class Neo4jGraph:
             emotional_value=emotional_value,
             vector=vector,
             timestamp=timestamp.isoformat(),
-            mood=mood
+            mood=mood,
+            keywords=keywords
         )
         record = result.single()
         return str(record["node_id"])

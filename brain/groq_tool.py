@@ -1,12 +1,12 @@
 from typing import Dict, Any, Optional
-from groq import Groq
+from groq import AsyncGroq
 from langsmith import traceable
 
 class GroqTool:
     def __init__(self, api_key: Optional[str] = None):
         """Initialize GroqTool with official Groq client"""
         self.api_key = api_key or self._get_api_key()
-        self.client = Groq(api_key=self.api_key)
+        self.client = AsyncGroq(api_key=self.api_key)
         self.available_models = {
             "LLaMA3 70B 7.1": "llama-3.1-70b-versatile",
             "LLaMA3 Groq 70B (Tool Use)": "llama3-groq-70b-8192-tool-use-preview",
@@ -27,13 +27,13 @@ class GroqTool:
 
     def _get_api_key(self) -> str:
         """Get API key from environment variable"""
-        api_key = "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"#"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"#"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"#"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"#  #"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"
+        api_key = "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"
         
         if not api_key:
             raise ValueError("GROQ_API_KEY environment variable not set")
         return api_key
 
-    def chat_completion(
+    async def chat_completion(
         self,
         messages: list,
         model: str = "llama-3.3-70b-versatile",
@@ -68,7 +68,7 @@ class GroqTool:
             if response_format:
                 completion_args["response_format"] = response_format
             
-            response = self.client.chat.completions.create(**completion_args)
+            response = await self.client.chat.completions.create(**completion_args)
             
             # Convert the response object to a dictionary format
             return {
@@ -84,8 +84,9 @@ class GroqTool:
         except Exception as e:
             print(f"Error calling Groq API: {str(e)}")
             raise
+
     @traceable
-    def generate_text(self, prompt=None, messages=None, **kwargs) -> str:
+    async def generate_text(self, prompt=None, messages=None, **kwargs) -> str:
         """
         Text generation with either a single prompt or a list of messages
         
@@ -102,7 +103,7 @@ class GroqTool:
         elif messages is None and prompt is None:
             raise ValueError("Either prompt or messages must be provided")
             
-        response = self.chat_completion(messages, **kwargs)
+        response = await self.chat_completion(messages, **kwargs)
         
         try:
             return response["choices"][0]["message"]["content"]

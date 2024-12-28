@@ -5,7 +5,7 @@ from enum import Enum
 from dataclasses import dataclass
 import pathlib
 import sys
-
+import asyncio
 # Add parent directory to path to allow imports
 current_dir = pathlib.Path(__file__).parent
 parent_dir = str(current_dir.parent.parent)
@@ -14,6 +14,8 @@ sys.path.append(parent_dir)
 # Import from brain package
 from brain.llm_chooser import LLMChooser
 from .neo4j_graph import Neo4jGraph  # Changed to relative import
+from .keyword_extractor import KeywordExtractor
+from brain.embedder import Embedder
 
 class TopicType(Enum):
     CORE = "core"
@@ -184,23 +186,18 @@ class TopicHierarchy:
 class MemoryParser:
     """Parses and categorizes memories into topics"""
     
-    def __init__(self, neo4j_graph: Optional[Neo4jGraph] = None, llm_tool: Optional[LLMChooser] = None):
-        """Initialize MemoryParser with Neo4j graph instance
+    def __init__(self, neo4j_graph=None, llm_tool: Optional[LLMChooser] = None):
+        """Initialize MemoryParser
         
         Args:
-            neo4j_graph: Optional Neo4j graph instance. If not provided, will create a new one with cloud parameters.
-            llm_tool: Optional LLM chooser instance.
+            neo4j_graph: Optional Neo4j graph instance
+            llm_tool: Optional LLM chooser instance
         """
-        if neo4j_graph is None:
-            neo4j_graph = Neo4jGraph(
-                uri="neo4j+s://a9277d8e.databases.neo4j.io",
-                username="neo4j",
-                password="tKSk2m5MwQr9w25IbSnB07KccMmTfjFtjcCsQIraczk"
-            )
         self.graph = neo4j_graph
         self.topic_hierarchy = TopicHierarchy(graph=neo4j_graph)
         self.llm_tool = llm_tool or LLMChooser()
-
+        self.keyword_extractor = KeywordExtractor(llm_tool=self.llm_tool)
+        self.embedder = Embedder()
     def link_memory_to_topics(self, memory_id: str, topic_ids: List[str]):
         """Create relationships between a memory and its topics in Neo4j"""
         if not self.graph:
@@ -224,30 +221,53 @@ class MemoryParser:
         )
         tx.run(query, memory_id=memory_id, topic_id=topic_id)
 
-    def enhance_memory_search(self, query: str, vector: List[float], top_k: int = 5) -> List[Dict]:
+    async def enhance_memory_search(self, query: str, persona_id: Optional[str] = None, top_k: int = 3) -> List[Dict]:
         """
-        Enhanced memory search combining vector similarity and topic relevance
+        Enhanced memory search combining vector similarity, topic relevance, and keyword matching
+        
+        Args:
+            query: The search query text
+            vector: The query embedding vector
+            persona_id: Optional persona ID to filter memories
+            top_k: Maximum number of results to return
+            
+        Returns:
+            List of dicts containing memory data with similarity and topic relevance scores
         """
         if not self.graph:
             return []
 
-        # First, categorize the query to identify relevant topics
-        topic_ids = self.categorize_memory(query)
+        # Run topic categorization and keyword extraction concurrently
+        query_vector_future = asyncio.create_task(self.embedder.embed_memory(query))
+        topic_ids_future = asyncio.create_task(self.categorize_memory(query))
+        query_keywords_future = asyncio.create_task(self.generate_keywords(query))
+        
+        # Wait for all tasks to complete
+        query_vector = await query_vector_future
+        topic_ids = await topic_ids_future
+        query_keywords = await query_keywords_future
         
         with self.graph.driver.session() as session:
             return session.execute_read(
                 self._enhanced_memory_search_tx,
-                query_vector=vector,
+                query_vector=query_vector,
                 topic_ids=topic_ids,
+                query_keywords=query_keywords,
+                persona_id=persona_id,
                 top_k=top_k
             )
 
     @staticmethod
-    def _enhanced_memory_search_tx(tx, query_vector: List[float], topic_ids: List[str], top_k: int) -> List[Dict]:
+    def _enhanced_memory_search_tx(tx, query_vector: List[float], topic_ids: List[str], query_keywords: List[str], persona_id: Optional[str], top_k: int) -> List[Dict]:
         """
         Transaction function for enhanced memory search
-        Combines vector similarity with topic relevance using manual cosine similarity
+        Combines vector similarity with topic relevance and keyword matching
         """
+        # Build base query with proper persona matching if needed
+        base_match = "MATCH (m:Memory)"
+        if persona_id:
+            base_match = "MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m:Memory)"
+
         # Build topic filter condition if topics are provided
         topic_filter = ""
         if topic_ids:
@@ -256,7 +276,7 @@ class MemoryParser:
 
         # Manual cosine similarity calculation with zero-division protection
         query = (
-            "MATCH (m:Memory) "
+            f"{base_match} "
             f"WHERE m.vector IS NOT NULL {topic_filter}"
             "WITH m, "
             "REDUCE(dot = 0.0, i IN RANGE(0, size(m.vector)-1) | dot + m.vector[i] * $query_vector[i]) as dot_product, "
@@ -277,8 +297,13 @@ class MemoryParser:
             "  WHEN $topic_ids = [] THEN 0 "  # Handle empty topic list for relevance calculation
             "  ELSE toFloat(topic_matches) / size($topic_ids) "
             "END as topic_relevance "
-            "RETURN m, similarity, topic_matches, topic_relevance "
-            "ORDER BY (similarity * 0.7 + topic_relevance * 0.3) DESC "
+            "WITH m, similarity, topic_matches, topic_relevance, "
+            "CASE "
+            "  WHEN $query_keywords = [] THEN 0 "  # Handle empty keywords list
+            "  ELSE SIZE([k IN $query_keywords WHERE k IN m.keywords | k]) / toFloat(SIZE($query_keywords)) "
+            "END as keyword_relevance "
+            "RETURN m, similarity, topic_matches, topic_relevance, keyword_relevance "
+            "ORDER BY (similarity * 0.5 + topic_relevance * 0.25 + keyword_relevance * 0.25) DESC "  # Adjusted weights
             "LIMIT $top_k"
         )
         
@@ -286,6 +311,8 @@ class MemoryParser:
             query,
             query_vector=query_vector,
             topic_ids=topic_ids or [],  # Ensure topic_ids is never None
+            query_keywords=query_keywords or [],  # Ensure query_keywords is never None
+            persona_id=persona_id,
             top_k=top_k
         )
         
@@ -293,7 +320,8 @@ class MemoryParser:
             {
                 "memory": dict(record["m"]),
                 "similarity": record["similarity"],
-                "topic_relevance": record["topic_relevance"]
+                "topic_relevance": record["topic_relevance"],
+                "keyword_relevance": record["keyword_relevance"]
             }
             for record in result
         ]
@@ -323,7 +351,7 @@ class MemoryParser:
         result = tx.run(query, topic_id=topic_id, limit=limit)
         return [{"memory": dict(record["m"])} for record in result]
 
-    def categorize_memory(self, content: str) -> List[str]:
+    async def categorize_memory(self, content: str) -> List[str]:
         """
         Analyze memory content and return relevant topic IDs
         Uses LLM to detect topics from content
@@ -349,7 +377,7 @@ Only return the JSON array, no other text."""
 
         try:
             # Use OpenAI by default with more reliable model
-            response = self.llm_tool.generate_text(
+            response = await self.llm_tool.generate_text(
                 provider="openai",
                 prompt=prompt,
                 model="gpt-3.5-turbo",
@@ -484,3 +512,14 @@ Only return the JSON array, no other text."""
                     related.append((other_id, strength))
                     
         return sorted(related, key=lambda x: x[1], reverse=True)
+
+    async def generate_keywords(self, content: str) -> List[str]:
+        """Generate keywords for a memory.
+        
+        Args:
+            content: The text content to generate keywords from
+            
+        Returns:
+            List of keyword strings
+        """
+        return await self.keyword_extractor.extract_keywords(content)

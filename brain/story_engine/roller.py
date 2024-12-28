@@ -7,8 +7,8 @@ from brain.llm_chooser import LLMChooser
 
 class TaskDifficulty(Enum):
     MUNDANE = 0
-    EASY = 8
-    HARD = 12
+    EASY = 6
+    HARD = 10
     CHALLENGING = 14
 
 
@@ -123,7 +123,7 @@ class StoryRoller:
         if difference >= 6:
             print("✨ Super Success!")
             return "super_success"
-        elif difference > 0:
+        elif difference >= 0:
             print("✅ Success!")
             return "success"
         elif difference >= -6:

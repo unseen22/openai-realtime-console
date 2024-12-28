@@ -299,6 +299,7 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
         results = self.memory_parser.enhance_memory_search(
             query=query,
             vector=query_embedding,
+            persona_id=self.persona_id,
             top_k=top_k
         )
         
@@ -493,7 +494,13 @@ Return only a single float number between 0.0 and 1.0 representing the importanc
             print(f"Topic '{topic_name}' not found")
             return []
         
-        results = self.memory_parser.get_memories_by_topic(topic_id, limit)
+        # Use enhanced search with the topic name as query
+        results = self.memory_parser.enhance_memory_search(
+            query=topic_name,
+            vector=self.create_embedding(topic_name),
+            persona_id=self.persona_id,
+            top_k=limit
+        )
         
         memories = []
         for result in results:

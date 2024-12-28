@@ -1,4 +1,4 @@
-import requests
+import aiohttp
 from typing import List, Union
 import numpy as np
 from numpy.linalg import norm
@@ -12,7 +12,7 @@ class Embedder:
         self.headers = {"Content-Type": "application/json"}
         self.vector_size = 768  # Updated to match actual API output
 
-    def get_embeddings(self, texts: Union[str, List[str]]) -> List[List[float]]:
+    async def get_embeddings(self, texts: Union[str, List[str]]) -> List[List[float]]:
         """
         Get embeddings for one or more texts using the embedding API
         
@@ -36,16 +36,15 @@ class Embedder:
             print(f"Sending request to {self.api_url}")
             print(f"Payload: {json.dumps(payload)}")
             
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json=payload
-            )
-            
-            print(f"Response status: {response.status_code}")
-            
-            response.raise_for_status()
-            data = response.json()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.api_url,
+                    headers=self.headers,
+                    json=payload
+                ) as response:
+                    print(f"Response status: {response.status}")
+                    response.raise_for_status()
+                    data = await response.json()
             
             # The API returns embeddings in the 'data' field
             if 'data' not in data:
@@ -61,16 +60,16 @@ class Embedder:
                     raise ValueError(f"Invalid embedding format: {len(emb) if isinstance(emb, list) else type(emb)}")
             
             return embeddings
-            
+
         except Exception as e:
             print(f"Error getting embeddings: {str(e)}")
             print(f"Error type: {type(e)}")
-            if isinstance(e, requests.exceptions.RequestException):
-                print(f"Request error details: {e.response.text if hasattr(e, 'response') else 'No response'}")
+            if isinstance(e, aiohttp.ClientError):
+                print(f"Request error details: {str(e)}")
             # Return zero vectors as fallback
             return [[0.0] * self.vector_size for _ in texts]
 
-    def embed_memory(self, text: str) -> List[float]:
+    async def embed_memory(self, text: str) -> List[float]:
         """
         Create embedding vector for a single memory text
         
@@ -80,7 +79,7 @@ class Embedder:
         Returns:
             Embedding vector as list of floats (768 dimensions)
         """
-        vectors = self.get_embeddings(text)
+        vectors = await self.get_embeddings(text)
         return vectors[0]
 
     @staticmethod
@@ -109,21 +108,26 @@ class Embedder:
 if __name__ == "__main__":
     embedder = Embedder()
     try:
-        # Test single text
-        text = "This is a test memory"
-        print("\nTesting single text embedding:")
-        vector = embedder.embed_memory(text)
-        print(f"Generated vector of length {len(vector)}")
-        print(f"First few values: {vector[:5]}")
-        print(f"Non-zero elements: {np.count_nonzero(vector)}")
+        import asyncio
         
-        # Test multiple texts
-        texts = ["Memory 1", "Memory 2", "Memory 3"]
-        print("\nTesting multiple text embeddings:")
-        vectors = embedder.get_embeddings(texts)
-        print(f"Generated {len(vectors)} vectors of length {len(vectors[0])}")
-        print(f"Sample values from first vector: {vectors[0][:5]}")
-        print(f"Non-zero elements in first vector: {np.count_nonzero(vectors[0])}")
+        async def test():
+            # Test single text
+            text = "This is a test memory"
+            print("\nTesting single text embedding:")
+            vector = await embedder.embed_memory(text)
+            print(f"Generated vector of length {len(vector)}")
+            print(f"First few values: {vector[:5]}")
+            print(f"Non-zero elements: {np.count_nonzero(vector)}")
+            
+            # Test multiple texts
+            texts = ["Memory 1", "Memory 2", "Memory 3"]
+            print("\nTesting multiple text embeddings:")
+            vectors = await embedder.get_embeddings(texts)
+            print(f"Generated {len(vectors)} vectors of length {len(vectors[0])}")
+            print(f"Sample values from first vector: {vectors[0][:5]}")
+            print(f"Non-zero elements in first vector: {np.count_nonzero(vectors[0])}")
+        
+        asyncio.run(test())
         
     except Exception as e:
         print(f"Error in test: {e}")
