@@ -213,8 +213,31 @@
     <script>
         const API_URL = 'http://localhost:8081';
 
+        // Check server connection when page loads
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log("Page loaded, checking server connection...");
+            try {
+                const response = await fetch(`${API_URL}/`);
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+                console.log("Server connection successful");
+                await loadAvailablePersonas();
+            } catch (error) {
+                console.error("Failed to connect to server:", error);
+                const errorMessage = {
+                    error: 'Server Connection Failed',
+                    details: 'Make sure the FastAPI server is running on port 8081'
+                };
+                displayResponse('store-memory-response', errorMessage);
+                displayResponse('memories-response', errorMessage);
+                displayResponse('search-memories-response', errorMessage);
+            }
+        });
+
         async function callEndpoint(endpoint, method = 'GET', body = null) {
             try {
+                console.log(`Calling ${method} ${endpoint}...`);
                 const options = {
                     method,
                     headers: {
@@ -225,14 +248,23 @@
                     options.body = JSON.stringify(body);
                 }
                 const response = await fetch(`${API_URL}${endpoint}`, options);
+                console.log(`Response status:`, response.status);
+                
+                const contentType = response.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    throw new Error(`Expected JSON response but got ${contentType}`);
+                }
+                
                 if (!response.ok) {
                     const errorData = await response.json();
-                    throw new Error(errorData.detail || 'API request failed');
+                    throw new Error(errorData.detail || `Server returned ${response.status}`);
                 }
+                
                 const data = await response.json();
+                console.log(`Response data:`, data);
                 return data;
             } catch (error) {
-                console.error('API Error:', error);
+                console.error(`API Error (${endpoint}):`, error);
                 return { 
                     error: error.message || 'Failed to fetch',
                     timestamp: new Date().toISOString()
@@ -360,18 +392,30 @@
 
         async function loadAvailablePersonas() {
             try {
-                // Initialize personas and get the list
+                console.log("Starting to load personas...");
+                
+                // Initialize personas first
                 const initResponse = await callEndpoint('/init-all-personas', 'POST');
                 console.log("Init response:", initResponse);
                 
-                if (!initResponse.initialized_personas) {
-                    throw new Error('No personas returned from initialization');
+                // Get personas using callEndpoint helper
+                const personas = await callEndpoint('/personas');
+                console.log("Fetched personas from /personas endpoint:", personas);
+                
+                if (!personas || personas.length === 0) {
+                    throw new Error('No personas returned from /personas endpoint');
                 }
                 
                 // Get all select elements
                 const storePersonaSelect = document.getElementById('store-memory-persona-id');
                 const getPersonaSelect = document.getElementById('get-memories-persona-id');
                 const searchPersonaSelect = document.getElementById('search-memories-persona-id');
+                
+                console.log("Found select elements:", {
+                    store: storePersonaSelect,
+                    get: getPersonaSelect,
+                    search: searchPersonaSelect
+                });
                 
                 // Clear existing options except the first one for all selects
                 while (storePersonaSelect.options.length > 1) {
@@ -384,50 +428,53 @@
                     searchPersonaSelect.remove(1);
                 }
                 
-                // Get details for each persona and add to all selects
-                for (const personaId of initResponse.initialized_personas) {
-                    try {
-                        // Get persona details
-                        const personaResponse = await callEndpoint(`/persona/${personaId}`);
-                        console.log(`Persona ${personaId} details:`, personaResponse);
-                        
-                        // Create option elements
-                        const storeOption = document.createElement('option');
-                        const getOption = document.createElement('option');
-                        const searchOption = document.createElement('option');
-                        
-                        storeOption.value = personaId;
-                        storeOption.text = `${personaId}`;
-                        getOption.value = personaId;
-                        getOption.text = `${personaId}`;
-                        searchOption.value = personaId;
-                        searchOption.text = `${personaId}`;
-                        
-                        // Add options to all selects
-                        storePersonaSelect.appendChild(storeOption);
-                        getPersonaSelect.appendChild(getOption);
-                        searchPersonaSelect.appendChild(searchOption);
-                    } catch (error) {
-                        console.error(`Error fetching details for persona ${personaId}:`, error);
-                    }
-                }
+                console.log("Cleared existing options");
                 
-                console.log("Finished loading personas");
+                // Add each persona to all selects
+                personas.forEach(persona => {
+                    console.log("Processing persona:", persona);
+                    
+                    const storeOption = document.createElement('option');
+                    const getOption = document.createElement('option');
+                    const searchOption = document.createElement('option');
+                    
+                    // Use persona.id as both value and display text
+                    storeOption.value = persona.id;
+                    storeOption.text = `${persona.id} - ${persona.name || ''}`;
+                    getOption.value = persona.id;
+                    getOption.text = `${persona.id} - ${persona.name || ''}`;
+                    searchOption.value = persona.id;
+                    searchOption.text = `${persona.id} - ${persona.name || ''}`;
+                    
+                    // Add options to all selects
+                    storePersonaSelect.appendChild(storeOption);
+                    getPersonaSelect.appendChild(getOption);
+                    searchPersonaSelect.appendChild(searchOption);
+                });
+                
+                console.log("Successfully added all persona options");
+                
+                // Show success message in response areas
+                const successMessage = {
+                    status: "success",
+                    message: `Loaded ${personas.length} personas`,
+                    personas: personas.map(p => p.id)
+                };
+                
+                displayResponse('store-memory-response', successMessage);
+                displayResponse('memories-response', successMessage);
+                displayResponse('search-memories-response', successMessage);
+                
             } catch (error) {
                 console.error('Error loading personas:', error);
+                const errorMessage = {
+                    error: 'Failed to load personas',
+                    details: error.message
+                };
                 // Show error in all response areas
-                displayResponse('store-memory-response', {
-                    error: 'Failed to load personas',
-                    details: error.message
-                });
-                displayResponse('memories-response', {
-                    error: 'Failed to load personas',
-                    details: error.message
-                });
-                displayResponse('search-memories-response', {
-                    error: 'Failed to load personas',
-                    details: error.message
-                });
+                displayResponse('store-memory-response', errorMessage);
+                displayResponse('memories-response', errorMessage);
+                displayResponse('search-memories-response', errorMessage);
             }
         }
 

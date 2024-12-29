@@ -1,12 +1,13 @@
 import json
-from brain.memory import MemoryType
 from brain.groq_tool import GroqTool
 from brain.perplexity_tool import PerplexityHandler
 from brain.llm_chooser import LLMChooser
 from datetime import datetime
 from langsmith import traceable
 from brain.experimental.neo4j_graph import Neo4jGraph
-from brain.experimental.persona_class import Persona
+from brain.persona_reflection import PersonaReflection
+from brain.experimental.memory_parcer import MemoryParser
+from brain.embedder import Embedder
 
 class PersonaScheduler:
     def __init__(self):
@@ -15,7 +16,9 @@ class PersonaScheduler:
         self.perplexity = PerplexityHandler(api_key="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")
         self.llm_chooser = LLMChooser()
         self.graph = Neo4jGraph()
-        print("✅ PersonaScheduler initialized successfully")
+        self.embedder = Embedder()
+        self.parser = MemoryParser()
+        self.reflection = PersonaReflection(neo4j_graph=self.graph, embedder=self.embedder, parser=self.parser)
 
     @traceable
     async def get_plans(self, persona, memory):
@@ -299,10 +302,10 @@ class PersonaScheduler:
         return formatted_schedule
     
 
-    async def task_manager(self, persona_id, task_id):
+    async def task_manager(self, persona, task_id):
         # Get current schedule from persona state
-        print(f"🔍 Task manager called for persona_id: {persona_id} and task_id: {task_id}")
-        persona_node = self.graph.get_persona_state(persona_id=persona_id)
+        print(f"🔍 Task manager called for persona_id: {persona['id']} and task_id: {task_id}")
+        persona_node = self.graph.get_persona_state(persona_id=persona['id'])
         current_schedule = persona_node.get('schedule', [])
         
         # Remove the completed task
@@ -312,13 +315,14 @@ class PersonaScheduler:
     ]
         
         # Update persona state with new schedule
-        self.graph.update_persona_state(persona_id=persona_id, schedule=updated_schedule)
+        self.graph.update_persona_state(persona_id=persona['id'], schedule=updated_schedule)
         
 
         print(f"🔍 Updated schedule after task completion: {updated_schedule}")
         # If schedule is empty, create new full schedule
         if not updated_schedule:
-            await self.create_full_schedule_and_save(persona_id)
+            await self.reflection.reflect_on_day(persona)
+            await self.create_full_schedule_and_save(persona['id'])
             
         return updated_schedule
 

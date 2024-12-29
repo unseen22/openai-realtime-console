@@ -201,15 +201,18 @@ class MemoryParser:
     async def link_memory_to_topics(self, memory_id: str, topic_ids: List[str]):
         """Create relationships between a memory and its topics in Neo4j"""
         if not self.graph:
+            print("🔍 No graph found, skipping memory linking in PARCER")
             return
 
         with self.graph.driver.session() as session:
+            print(f"🔍 Linking memory {memory_id} to topics: {topic_ids}")
             for topic_id in topic_ids:
                 session.execute_write(
                     self._create_memory_topic_relationship_tx,
                     memory_id,
                     topic_id
                 )
+            print("🔍 Memory linked to topics successfully")
 
     @staticmethod
     def _create_memory_topic_relationship_tx(tx, memory_id: str, topic_id: str):
@@ -263,55 +266,53 @@ class MemoryParser:
         Transaction function for enhanced memory search
         Combines vector similarity with topic relevance and keyword matching
         """
-        # Build base query with proper persona matching if needed
-        base_match = "MATCH (m:Memory)"
+        # First get base matches using vector index for efficient similarity search
+        base_query = (
+            "CALL db.index.vector.queryNodes('memory_vector_idx', $top_k * 3, $query_vector) "
+            "YIELD node, score "
+            "WITH node as m, score as similarity "
+            "WHERE m.vector IS NOT NULL "
+        )
+
+        # Add persona filter if needed
         if persona_id:
-            base_match = "MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m:Memory)"
+            base_query += (
+                "MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m) "
+            )
 
-        # Build topic filter condition if topics are provided
-        topic_filter = ""
-        if topic_ids:
-            topic_filter = "AND EXISTS ((m)-[:BELONGS_TO]->(:Topic)) "
-            topic_filter += "AND ANY(topic IN [(m)-[:BELONGS_TO]->(t:Topic) | t.id] WHERE topic IN $topic_ids) "
-
-        # Manual cosine similarity calculation with zero-division protection
-        query = (
-            f"{base_match} "
-            f"WHERE m.vector IS NOT NULL {topic_filter}"
-            "WITH m, "
-            "REDUCE(dot = 0.0, i IN RANGE(0, size(m.vector)-1) | dot + m.vector[i] * $query_vector[i]) as dot_product, "
-            "SQRT(REDUCE(l2 = 0.0, i IN RANGE(0, size(m.vector)-1) | l2 + m.vector[i] * m.vector[i])) as mag1, "
-            "SQRT(REDUCE(l2 = 0.0, i IN RANGE(0, size($query_vector)-1) | l2 + $query_vector[i] * $query_vector[i])) as mag2 "
-            "WITH m, "
-            "CASE "
-            "  WHEN mag1 * mag2 = 0 THEN 0 "  # Handle zero magnitude
-            "  ELSE dot_product / (mag1 * mag2) "
-            "END as similarity "
+        # Add topic relevance calculation
+        topic_query = base_query + (
             "WITH m, similarity, "
             "CASE "
-            "  WHEN $topic_ids = [] THEN 0 "  # Handle empty topic list
+            "  WHEN $topic_ids = [] THEN 0 "
             "  ELSE SIZE([(m)-[:BELONGS_TO]->(t:Topic) WHERE t.id IN $topic_ids | t]) "
             "END as topic_matches "
             "WITH m, similarity, topic_matches, "
             "CASE "
-            "  WHEN $topic_ids = [] THEN 0 "  # Handle empty topic list for relevance calculation
+            "  WHEN $topic_ids = [] THEN 0 "
             "  ELSE toFloat(topic_matches) / size($topic_ids) "
             "END as topic_relevance "
-            "WITH m, similarity, topic_matches, topic_relevance, "
+        )
+
+        # Add keyword relevance calculation and final scoring
+        final_query = topic_query + (
+            "WITH m, similarity, topic_relevance, "
             "CASE "
-            "  WHEN $query_keywords = [] THEN 0 "  # Handle empty keywords list
+            "  WHEN $query_keywords = [] THEN 0 "
             "  ELSE SIZE([k IN $query_keywords WHERE k IN m.keywords | k]) / toFloat(SIZE($query_keywords)) "
             "END as keyword_relevance "
-            "RETURN m, similarity, topic_matches, topic_relevance, keyword_relevance "
-            "ORDER BY (similarity * 0.5 + topic_relevance * 0.25 + keyword_relevance * 0.25) DESC "  # Adjusted weights
-            "LIMIT $top_k"
+            "WITH m, similarity, topic_relevance, keyword_relevance, "
+            "(similarity * 0.5 + topic_relevance * 0.25 + keyword_relevance * 0.25) as final_score "
+            "ORDER BY final_score DESC "
+            "LIMIT $top_k "
+            "RETURN m, similarity, topic_relevance, keyword_relevance, final_score"
         )
         
         result = tx.run(
-            query,
+            final_query,
             query_vector=query_vector,
-            topic_ids=topic_ids or [],  # Ensure topic_ids is never None
-            query_keywords=query_keywords or [],  # Ensure query_keywords is never None
+            topic_ids=topic_ids or [],
+            query_keywords=query_keywords or [],
             persona_id=persona_id,
             top_k=top_k
         )
@@ -321,7 +322,8 @@ class MemoryParser:
                 "memory": dict(record["m"]),
                 "similarity": record["similarity"],
                 "topic_relevance": record["topic_relevance"],
-                "keyword_relevance": record["keyword_relevance"]
+                "keyword_relevance": record["keyword_relevance"],
+                "final_score": record["final_score"]
             }
             for record in result
         ]
@@ -486,7 +488,7 @@ Only return the JSON array, no other text."""
             
         return topic.id if topic else None
 
-    def get_topic_path(self, topic_id: str) -> List[str]:
+    async def get_topic_path(self, topic_id: str) -> List[str]:
         """Get the full path of topic names from root to the given topic"""
         path = []
         topic = self.topic_hierarchy.topics.get(topic_id)

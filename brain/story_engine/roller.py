@@ -91,7 +91,8 @@ class StoryRoller:
             
             result = json.loads(llm_response)
             characteristic = result["characteristic"].lower()
-            bonus = self.persona['characteristics'][characteristic]
+            characteristics_dict = json.loads(self.persona['characteristics'])
+            bonus = characteristics_dict[characteristic]
             print(f"💫 {characteristic.title()} bonus: +{bonus}")
             return bonus
             

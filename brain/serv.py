@@ -7,14 +7,12 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
-import openai
 import tempfile
 
-from brain.brain import Brain
-from brain.memory import Memory, MemoryType
-from brain.fake_memories import create_fake_memories_for_persona, init_all_persona_memories
-from brain.init_personas import init_persona_brains
-from brain.transcription import transcription_handler
+from brain.experimental.neo4j_graph import Neo4jGraph
+
+print("\n=== Starting FastAPI Server ===")
+print("Configuring CORS...")
 
 app = FastAPI()
 
@@ -27,23 +25,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize brains for all personas
-init_persona_brains()
+print("CORS configured")
 
-# After app initialization, add brain registry
-brain_registry: Dict[str, Brain] = {}
+# Initialize Neo4j connection
+print("Initializing Neo4j connection...")
+neo4j_graph = Neo4jGraph()
+print("Neo4j connection initialized")
 
-# Add this near the top of your file, after creating the FastAPI app
+@app.on_event("startup")
+async def startup_event():
+    print("\nServer startup:")
+    print("Available routes:")
+ 
+
+# Add static file serving
 app.mount("/static", StaticFiles(directory="public"), name="static")
 app.mount("/static/personas", StaticFiles(directory="brain/personas"), name="personas")
 
 class MemoryItem(BaseModel):
     key: str
     value: str
-
-class FunctionCall(BaseModel):
-    function_name: str
-    arguments: Dict[str, Any]
 
 class ConversationItem(BaseModel):
     speaker: str
@@ -70,343 +71,115 @@ async def read_root():
 
 @app.get("/memories")
 async def get_memories(persona_id: str = Query("default")):
-    """Get all stored memories for a specific persona"""
+    """Get all memories for a specific persona"""
     try:
-        if persona_id not in brain_registry:
-            brain_registry[persona_id] = Brain(persona_id=persona_id)
-        return brain_registry[persona_id].get_all_memories()
+        memories = neo4j_graph.get_all_memories(persona_id)
+        return memories
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/memory/{key}")
 async def get_memory(key: str):
-    """Get a specific memory by key"""
-    try:
-        memory = brain.get_memory(key)
-        if memory is None:
-            raise HTTPException(status_code=404, detail="Memory not found")
-        return memory
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Get a specific memory by key - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")
 
 @app.post("/memory")
 async def set_memory(memory_item: MemoryItem):
-    """Store a new memory"""
-    try:
-        brain.set_memory(memory_item.key, memory_item.value)
-        return {"status": "success", "message": f"Memory stored for key: {memory_item.key}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/function")
-async def call_function(function_call: FunctionCall):
-    """Execute a brain function"""
-    try:
-        result = brain.execute_function(
-            function_call.function_name, 
-            function_call.arguments
-        )
-        return {"status": "success", "result": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/fake-memories")
-async def get_memories_endpoint(persona_id: str = Query("default")):
-    """Get fake memories for a specific persona"""
-    try:
-        if persona_id not in brain_registry:
-            brain_registry[persona_id] = Brain(persona_id=persona_id)
-        
-        brain = brain_registry[persona_id]
-        
-        # Clear existing memories before creating new ones
-        brain.clear_memories()
-        
-        # Create and store fake memories
-        create_fake_memories_for_persona(persona_id, brain)
-        
-        # Get all memories and concatenate their content
-        memories = brain.get_all_memories()
-        concatenated_memories = "\n".join(memory.content for memory in memories)
-        print(f"Initialized memories for persona {persona_id}:", concatenated_memories)
-        
-        return {
-            "status": "success",
-            "persona_id": persona_id,
-            "memories": concatenated_memories
-        }   
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Store a new memory - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")
 
 @app.post("/conversation")
 async def save_conversation(conversation: ConversationItem):
-    """Save a conversation transcript as a memory"""
-    try:
-        # Only save assistant responses as memories
-        if conversation.speaker == "assistant":
-            memory = Memory.create(
-                content=conversation.content,
-                memory_type=MemoryType.CONVERSATION
-            )
-            return {"status": "success", "memory_id": str(memory.timestamp)}
-        return {"status": "skipped", "message": "Only assistant messages are saved as memories"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Save a conversation transcript as a memory - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")
 
 @app.get("/persona/{persona_id}")
 async def get_persona_brain(persona_id: str):
-    """Get or create a brain for specific persona"""
+    """Get persona details from Neo4j"""
     try:
-        if persona_id not in brain_registry:
-            brain_registry[persona_id] = Brain(persona_id=persona_id)
-        
-        persona_brain = brain_registry[persona_id]
-        
+        state = neo4j_graph.get_persona_state(persona_id)
         return {
             "status": "success",
             "persona_id": persona_id,
-            "mood": persona_brain.get_mood(),
-            "status": persona_brain.get_status(),
-            "memory_count": len(persona_brain.get_all_memories()),
-            "memories": persona_brain.get_all_memories()
+            "mood": state.get("mood", "neutral"),
+            "status": state.get("status", "active"),
+            "characteristics": state.get("characteristics", {})
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/personas")
+async def get_all_personas():
+    """Get all personas from Neo4j"""
+    try:
+        print("\n=== Starting get_all_personas endpoint ===")
+        print("Calling neo4j_graph.get_all_personas()...")
+        
+        personas = neo4j_graph.get_all_personas()
+        print(f"Raw personas data from Neo4j: {personas}")
+        
+        # Extract just the persona data and format it for the frontend
+        formatted_personas = []
+        for p in personas:
+            print(f"\nProcessing persona data: {p}")
+            persona_data = p["persona"]
+            formatted_persona = {
+                "id": persona_data.get("id"),
+                "name": persona_data.get("name", ""),
+                "profile": persona_data.get("profile", ""),
+                "node_id": persona_data.get("node_id", "")
+            }
+            print(f"Formatted persona: {formatted_persona}")
+            formatted_personas.append(formatted_persona)
+        
+        print(f"\nFinal formatted personas list: {formatted_personas}")
+        print("=== Finished get_all_personas endpoint ===\n")
+        return formatted_personas
+        
+    except Exception as e:
+        print(f"ERROR in get_all_personas: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get personas: {str(e)}"
+        )
+
 @app.post("/init-all-personas")
 async def init_all_personas():
-    """Initialize memories for all personas"""
+    """Initialize all personas in Neo4j - Placeholder"""
     try:
         print("Starting persona initialization...")
-        
-        # Clear existing brains first
-        brain_registry.clear()
-        print("Cleared brain registry")
-        
-        # Initialize all personas
-        try:
-            from brain.fake_memories import init_all_persona_memories
-            init_all_persona_memories()
-            print("FAKE MEMORIES INITIALIZED")
-            
-            # Add initialized brains to registry
-            personas_path = Path(__file__).parent / "personas" / "voice_instruct.json"
-            with open(personas_path, 'r') as f:
-                personas = json.load(f)
-                print("PERSONAS:", personas)
-            
-            for persona_id in personas:
-                brain_registry[persona_id] = Brain(persona_id=persona_id)
-            
-            print("Successfully initialized all personas")
-            print(f"Brain registry size: {len(brain_registry)}")
-            
-            # Return more detailed response
-            return {
-                "status": "success",
-                "message": "All persona memories initialized",
-                "brain_registry_size": len(brain_registry),
-                "initialized_personas": list(brain_registry.keys())
-            }
-            
-        except FileNotFoundError as e:
-            print(f"Personas file not found: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Personas file not found: {str(e)}"
-            )
-        except Exception as init_error:
-            print(f"Error during initialization: {str(init_error)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Initialization error: {str(init_error)}"
-            )
-            
+        # This would be where you initialize personas in Neo4j
+        # For now, just return success
+        return {
+            "status": "success",
+            "message": "Personas initialized"
+        }
     except Exception as e:
-        print(f"Error in init_all_personas endpoint:")
-        print(f"Error type: {type(e).__name__}")
-        print(f"Error message: {str(e)}")
+        print(f"Error initializing personas: {str(e)}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Failed to initialize personas: {str(e)}"
         )
 
 @app.post("/memory/{persona_id}")
-async def store_persona_memory(persona_id: str, memory: dict):
-    """Store a memory in a specific persona's brain"""
-    try:
-        if persona_id not in brain_registry:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Persona '{persona_id}' not found in brain registry"
-            )
-
-        brain = brain_registry[persona_id]
-        content = memory.get("content")
-        importance = memory.get("importance", 0.0)
-        memory_type_str = memory.get("memory_type", "conversation")
-
-        if not content:
-            raise HTTPException(
-                status_code=400,
-                detail="'content' is required in memory object"
-            )
-
-        try:
-            memory_type = MemoryType(memory_type_str)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid memory_type: {memory_type_str}"
-            )
-
-        memory_obj = brain.create_memory(
-            content=content,
-            memory_type=memory_type
-        )
-
-        return {
-            "status": "success",
-            "message": f"Memory stored for persona '{persona_id}'",
-            "memory": memory_obj.to_dict()
-        }
-
-    except HTTPException as http_error:
-        raise http_error
-    except Exception as e:
-        print(f"Error storing memory for persona '{persona_id}':")
-        print(f"Error type: {type(e).__name__}")
-        print(f"Error message: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to store memory: {str(e)}"
-        )
+async def store_persona_memory(persona_id: str, memory: MemoryCreate):
+    """Store a memory for a specific persona - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")
 
 @app.delete("/memories/{persona_id}")
 async def delete_all_memories(persona_id: str):
-    """Delete all memories for a specific persona"""
-    try:
-        if persona_id not in brain_registry:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Persona '{persona_id}' not found"
-            )
-        
-        brain = brain_registry[persona_id]
-        brain.clear_memories()
-        
-        return {
-            "status": "success",
-            "message": f"All memories deleted for persona '{persona_id}'"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Delete all memories for a specific persona - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")
 
 @app.delete("/memory/{persona_id}/{memory_id}")
 async def delete_memory(persona_id: str, memory_id: str):
-    """Delete a specific memory from a persona"""
-    try:
-        if persona_id not in brain_registry:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Persona '{persona_id}' not found"
-            )
-        
-        brain = brain_registry[persona_id]
-        if memory_id not in brain.memories:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Memory '{memory_id}' not found"
-            )
-        
-        del brain.memories[memory_id]
-        brain.db.delete_memory(persona_id, memory_id)
-        
-        return {
-            "status": "success",
-            "message": f"Memory '{memory_id}' deleted from persona '{persona_id}'"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Delete a specific memory from a persona - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")
 
 @app.post("/memories/search")
-async def search_memories(query: str, persona_id: str = "pink_man", top_k: int = 3) -> SearchResponse:
-    """Search for similar memories for a specific persona"""
-    try:
-        print(f"\nSearching memories for persona '{persona_id}' with query: {query}")
-        
-        if not persona_id:
-            raise HTTPException(status_code=400, detail="persona_id is required")
-            
-        brain = Brain(persona_id)
-        
-        # Get all memories first to check if we have any
-        all_memories = brain.get_all_memories()
-        print(f"Total memories found for persona '{persona_id}': {len(all_memories)}")
-        
-        if not all_memories:
-            print(f"No memories found for persona '{persona_id}'")
-            return SearchResponse(memories=[])
-        
-        # Search for similar memories
-        similar_memories = brain.search_similar_memories(query, top_k)
-        print(f"Found {len(similar_memories)} similar memories")
-        
-        # Convert to response format
-        memory_responses = []
-        for memory, similarity in similar_memories:
-            print(f"Memory: {memory.content[:100]}... (similarity: {similarity:.4f})")
-            memory_responses.append(
-                MemoryResponse(
-                    content=memory.content,
-                    timestamp=memory.timestamp,
-                    importance=memory.importance,
-                    similarity=similarity
-                )
-            )
-        
-        return SearchResponse(memories=memory_responses)
-    except Exception as e:
-        print(f"Error in search_memories: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/transcribe/local")
-async def transcribe_audio(audio_file: UploadFile = File(...)):
-    """Transcribe audio using OpenAI Whisper API and search memories"""
-    try:
-        content = await audio_file.read()
-        print(f"[DEBUG AUDIO] Received audio file size: {len(content)} bytes")
-
-        transcribed_text = await transcription_handler.transcribe_audio(content)
-        
-        # Search memories using the transcribed text
-        search_results = await search_memories(
-            query=transcribed_text,
-            persona_id="pink_man",
-            top_k=3
-        )
-        
-        # Convert search results to concatenated string
-        search_results_text = "\n".join([
-            f"{memory.content}" for memory in search_results.memories
-        ])
-
-        response = {
-            "text": transcribed_text,
-            "search_results": search_results_text, 
-            "status": "success"
-        }
-
-        print(f"Response Inside SERV: {transcribed_text}")
-
-        # Clean up variables
-        del content
-        del transcribed_text
-        del search_results
-        del search_results_text
-
-        return response
-
-    except Exception as e:
-        print(f"Error in transcribe_audio endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def search_memories(query: str, persona_id: str = "default", top_k: int = 3):
+    """Search for similar memories - Placeholder"""
+    raise HTTPException(status_code=501, detail="Not implemented")

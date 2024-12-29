@@ -4,15 +4,19 @@ from brain.llm_chooser import LLMChooser
 from langsmith import traceable
 from datetime import datetime
 from brain.memory import MemoryType
+from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.embedder import Embedder
+from brain.experimental.memory_parcer import MemoryParser
+
 
 class PersonaReflection:
-    def __init__(self, neo4j_graph=None, embedder=None, parser=None):
+    def __init__(self, neo4j_graph=None, llm_chooser=None, groq=None, embedder=None, parser=None):
         print("🔄 Initializing PersonaReflection...")
-        self.llm_chooser = LLMChooser()
-        self.groq = GroqTool()
-        self.graph = neo4j_graph
-        self.embedder = embedder
-        self.parser = parser
+        self.llm_chooser = LLMChooser() if llm_chooser is None else llm_chooser
+        self.groq = GroqTool() if groq is None else groq
+        self.graph = Neo4jGraph() if neo4j_graph is None else neo4j_graph
+        self.embedder = Embedder() if embedder is None else embedder
+        self.parser = MemoryParser(neo4j_graph=self.graph) if parser is None else parser
         print("✅ PersonaReflection initialized successfully")
         
     def _get_unreflected_experiences(self, persona_id: str):
@@ -38,7 +42,7 @@ class PersonaReflection:
             experiences = [{"content": record["e"]["content"], "node_id": record["node_id"]} for record in result]
             return experiences
         
-    def _connect_reflection_to_experiences(self, reflection_id: str, experience_ids: list, persona_id: str):
+    async def _connect_reflection_to_experiences(self, reflection_id: str, experience_ids: list, persona_id: str):
         """Create BELONGS_TO relationships between experiences and the reflection for the same persona."""
         if not self.graph:
             return
@@ -60,7 +64,7 @@ class PersonaReflection:
                 session.run(query, params)
         
     @traceable
-    def reflect_on_day(self, persona: str) -> list:
+    async def reflect_on_day(self, persona: str) -> dict:
         """
         Generate a reflection on the day's activities and experiences with details of the activities.
         
@@ -73,7 +77,8 @@ class PersonaReflection:
         print("\n🤔 Starting daily reflection process...")
         
         # Get unreflected experiences
-        experiences = self._get_unreflected_experiences(persona.persona_id)
+        experiences = self._get_unreflected_experiences(persona['id'])
+        print(f"🔍 Found {len(experiences)} unreflected experiences")
         experience_contents = [exp["content"] for exp in experiences]
         experience_ids = [exp["node_id"] for exp in experiences]  # Use the node_id from Neo4j
         
@@ -84,7 +89,7 @@ class PersonaReflection:
             return []
 
         reflection_prompt = f"""
-        As {persona.persona_profile}, reflect on your day and experiences:
+        As {persona['profile']}, reflect on your day and experiences:
         
         Today's Activities and Experiences:
         {experience_contents}
@@ -107,7 +112,7 @@ class PersonaReflection:
         print("\n🤖 Generating reflection using LLM...")
         try:
             print("📝 Sending reflection prompt to OpenAI...")
-            response = self.llm_chooser.generate_text(
+            response = await self.llm_chooser.generate_text(
                 provider="openai",
                 messages=[{"role": "user", "content": reflection_prompt}],
                 model="gpt-4o",
@@ -123,47 +128,47 @@ class PersonaReflection:
             reflection_data = json.loads(response)
             
             # Store reflection in Neo4j if graph components are available
-            if all([self.graph, self.embedder, self.parser]):
-                reflection_content = reflection_data.get("reflection", "")
-                if reflection_content:
-                    # Generate embedding for the reflection
-                    reflection_vector = self.embedder.embed_memory(reflection_content)
-                    
-                    # Create memory node in Neo4j
-                    memory = {
-                        "content": reflection_content,
-                        "type": MemoryType.REFLECTION.value,
-                        "importance": 0.8,
-                        "emotional_value": 0.5,
-                        "vector": reflection_vector,
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    
-                    memory_id = self.graph.create_memory_node(
-                        persona_id=persona.persona_id,
-                        content=memory["content"],
-                        memory_type=memory["type"],
-                        importance=memory["importance"],
-                        emotional_value=memory["emotional_value"],
-                        vector=memory["vector"],
-                        timestamp=datetime.now()
-                    )
-                    
-                    # Connect reflection to experiences from the same persona
-                    if experience_ids:
-                        self._connect_reflection_to_experiences(memory_id, experience_ids, persona.persona_id)
-                        print(f"Connected reflection to {len(experience_ids)} experiences")
-                    
-                    # Categorize and link topics
-                    topic_ids = self.parser.categorize_memory(reflection_content)
-                    if topic_ids:
-                        self.parser.link_memory_to_topics(memory_id, topic_ids)
-                        print("Memory categorized with topics:")
-                        for topic_id in topic_ids:
-                            topic_path = self.parser.get_topic_path(topic_id)
-                            print(f"  - {' -> '.join(topic_path)}")
-                    else:
-                        print("No topics found for this memory")
+            reflection_content = reflection_data.get("reflection", "")
+            if reflection_content:
+                # Generate embedding for the reflection
+                reflection_vector = await self.embedder.embed_memory(reflection_content)
+                
+                # Create memory node in Neo4j
+                memory = {
+                    "content": reflection_content,
+                    "type": MemoryType.REFLECTION.value,
+                    "importance": 0.8,
+                    "emotional_value": 0.5,
+                    "vector": reflection_vector,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                memory_id = await self.graph.create_memory_node(
+                    persona_id=persona['id'],
+                    content=memory["content"],
+                    memory_type=memory["type"],
+                    importance=memory["importance"],
+                    emotional_value=memory["emotional_value"],
+                    vector=memory["vector"],
+                    timestamp=datetime.now()
+                )
+                print(f"🔗 Created memory node with ID: {memory_id}")
+
+                # Connect reflection to experiences from the same persona
+                if experience_ids:
+                    await self._connect_reflection_to_experiences(memory_id, experience_ids, persona['id'])
+                    print(f"Connected reflection to {len(experience_ids)} experiences")
+                
+                # Categorize and link topics
+                topic_ids = await self.parser.categorize_memory(reflection_content)
+                if topic_ids:
+                    await self.parser.link_memory_to_topics(memory_id, topic_ids)
+                    print("Memory categorized with topics:")
+                    for topic_id in topic_ids:
+                        topic_path = await self.parser.get_topic_path(topic_id)
+                        print(f"  - {' -> '.join(topic_path)}")
+                else:
+                    print("No topics found for this memory")
             
             # Return only the plans
             return reflection_data.get("plans", [])

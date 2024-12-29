@@ -98,7 +98,7 @@ class PersonaExecuteSchedule:
                     }
 
                     print(f"✅ Completed task {i+1}/{len(schedule_items)}: {activity}")
-                    await self.persona_scheduler.task_manager(persona['id'], activity)
+                    await self.persona_scheduler.task_manager(persona, activity)
 
             
             print("\n✅ Schedule processing completed successfully")
@@ -210,7 +210,7 @@ class PersonaExecuteSchedule:
                     await self.parser.link_memory_to_topics(memory_id, topic_ids)
                     print("Memory categorized with topics:")
                     for topic_id in topic_ids:
-                        topic_path = self.parser.get_topic_path(topic_id)
+                        topic_path = await self.parser.get_topic_path(topic_id)
                         print(f"  - {' -> '.join(topic_path)}")
                 else:
                     print("No topics found for this memory")
@@ -264,8 +264,8 @@ class PersonaExecuteSchedule:
         print(f"🔍 Memory: {memory}")
         
         try:
-            action = task_actions.get("required_actions", [])[0] if task_actions.get("required_actions") else None
-            if action:
+            action = task_actions.get("required_actions", [])
+            for action in action:
                 groq_prompt = f"""
                 Analyze this specific action and determine if we need to:
                 1. Gather knowledge (for tasks requiring up-to-date information, or tasks that are not concrete, or need realtime knowledge to simulate, need a decision to make, choosing films, music, activities, etc)

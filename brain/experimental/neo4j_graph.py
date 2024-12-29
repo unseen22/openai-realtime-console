@@ -37,14 +37,20 @@ class Neo4jGraph:
     def _create_vector_index(tx):
         """Create vector index for Memory nodes on the vector property"""
         try:
-            # Create basic vector index without similarity procedures
+            # Create vector index with proper configuration
             tx.run(
-                "CREATE INDEX memory_vector_idx IF NOT EXISTS "
-                "FOR (m:Memory) ON (m.vector)"
+                "CREATE VECTOR INDEX memory_vector_idx IF NOT EXISTS "
+                "FOR (m:Memory) "
+                "ON m.vector "
+                "OPTIONS { indexConfig: { "
+                "`vector.dimensions`: 768, "  # BGE embeddings dimension
+                "`vector.similarity_function`: 'cosine', "  # Cosine similarity is generally best for text embeddings
+                "`vector.quantization.enabled`: true "  # Enable quantization for better memory usage
+                "}} "
             )
-            print("Created basic vector index")
+            print("✅ Created vector index for Memory nodes")
         except Exception as e:
-            print(f"Note: Vector index not created (optional feature): {str(e)}")
+            print(f"Warning: Vector index not created (optional feature): {str(e)}")
             print("Vector similarity search will fall back to manual calculation")
 
     @staticmethod
@@ -172,7 +178,7 @@ class Neo4jGraph:
         return str(record["node_id"])
     
     async def create_persona_node(self, persona_id: str, persona_name: str, persona_profile: str, 
-                         characteristics: Optional[Dict[str, int] | 'Characteristics'] = None) -> str:
+                         characteristics: Optional[Dict[str, int] | 'Characteristics'] = None, goals: Optional[List[str]] = None, plans: Optional[List[str]] = None, schedule: Optional[List[str]] = None) -> str:
         """Create a persona node in the graph
         
         Args:
@@ -219,9 +225,9 @@ class Neo4jGraph:
                     characteristics=char_dict,
                     mood="neutral",
                     status="active", 
-                    plans=[],
-                    goals=[],
-                    schedule=[]
+                    plans=plans,
+                    goals=goals,
+                    schedule=schedule
                 ).single()
             )
             return result["node_id"]
@@ -245,6 +251,26 @@ class Neo4jGraph:
                 "node_id": record["node_id"]  # Add the node ID
             }
         } for record in result]
+    
+    def get_all_personas(self) -> List[Dict]:
+        """Get all persona nodes and their IDs from the graph"""
+        with self.driver.session() as session:
+            return session.execute_read(self._get_all_personas)
+
+    @staticmethod 
+    def _get_all_personas(tx) -> List[Dict]:
+        query = (
+            "MATCH (p:Persona) "
+            "RETURN p, elementId(p) as node_id"
+        )
+        result = tx.run(query)
+        return [{
+            "persona": {
+                **dict(record["p"]),  # All properties from persona node
+                "node_id": record["node_id"]  # Add the node ID
+            }
+        } for record in result]
+        
     
 
     def get_persona_memories(self, persona_id: str, limit: int = 3) -> List[Dict]:
@@ -335,7 +361,7 @@ class Neo4jGraph:
         """Transaction function to search for similar memories using vector index"""
         query = (
             "MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m:Memory) "
-            "WHERE m.vector IS NOT NULL "
+            "WITH m "
             "CALL db.index.vector.queryNodes('memory_vector_idx', $top_k, $query_vector) "
             "YIELD node AS memory, score "
             "WHERE memory = m "  # Filter to only include memories of this persona
