@@ -14,19 +14,20 @@ class TaskDifficulty(Enum):
 
 
 class StoryRoller:
-    def __init__(self, brain: Brain):
+    def __init__(self, persona):
         """Initialize with brain instance"""
-        self.brain = brain
+        self.persona = persona
         self.llm_chooser = LLMChooser()
         
     
 
-    def _determine_difficulty(self, task: str) -> TaskDifficulty:
+    async def _determine_difficulty(self, task: str) -> TaskDifficulty:
         """Analyze task to determine its difficulty level"""
         # Create prompt for difficulty analysis
+        print(f"🎯 DETERMINING DIFFICULTY FOR TASK: {task}")
         prompt = f"""
         Given this persona's profile:
-        {self.brain.persona_profile}
+        {self.persona['profile']}
         
         Analyze this task and determine its difficulty level for this persona:
         {task}
@@ -37,7 +38,7 @@ class StoryRoller:
         
         try:
             # Get difficulty assessment from LLM
-            llm_response = self.llm_chooser.generate_text(
+            llm_response = await self.llm_chooser.generate_text(
                 provider="groq",
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile",
@@ -54,13 +55,13 @@ class StoryRoller:
             print(f"Error determining difficulty: {str(e)}")
             return TaskDifficulty.EASY
 
-    def _roll_d20(self) -> int:
+    async def _roll_d20(self) -> int:
         """Roll a d20 die"""
         roll = random.randint(1, 20)
         print(f"🎲 D20 Roll: {roll}")
         return roll
 
-    def _get_characteristic_bonus(self, task: str) -> int:
+    async def _get_characteristic_bonus(self, task: str) -> int:
         """Determine which characteristic applies to this task and get its bonus value"""
         prompt = f"""
         Given this task: {task}
@@ -79,7 +80,7 @@ class StoryRoller:
 
         try:
             # Get characteristic assessment from LLM
-            llm_response = self.llm_chooser.generate_text(
+            llm_response = await self.llm_chooser.generate_text(
                 provider="groq",
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile",
@@ -90,7 +91,7 @@ class StoryRoller:
             
             result = json.loads(llm_response)
             characteristic = result["characteristic"].lower()
-            bonus = getattr(self.brain.characteristics, characteristic)
+            bonus = self.persona['characteristics'][characteristic]
             print(f"💫 {characteristic.title()} bonus: +{bonus}")
             return bonus
             
@@ -98,12 +99,12 @@ class StoryRoller:
             print(f"Error determining characteristic bonus: {str(e)}")
             return 0
 
-    def roll_for_outcome(self, task: str) -> str:
+    async def roll_for_outcome(self, task: str) -> str:
         """
         Roll for task outcome, considering difficulty and characteristics.
         Returns one of: "super_success", "success", "failure", "super_failure"
         """
-        difficulty = self._determine_difficulty(task)
+        difficulty = await self._determine_difficulty(task)
         print(f"📊 Task difficulty: {difficulty.name} (DC {difficulty.value})")
         
         # Mundane tasks automatically succeed
@@ -111,8 +112,8 @@ class StoryRoller:
             print("✨ Mundane task - automatic success!")
             return "success"
             
-        d20_roll = self._roll_d20()
-        characteristic_bonus = self._get_characteristic_bonus(task)
+        d20_roll = await self._roll_d20()
+        characteristic_bonus = await self._get_characteristic_bonus(task)
         total_roll = d20_roll + characteristic_bonus
         print(f"🎯 Total roll: {total_roll} (Roll: {d20_roll} + Bonus: {characteristic_bonus})")
         

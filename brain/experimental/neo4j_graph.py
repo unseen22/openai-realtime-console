@@ -130,6 +130,13 @@ class Neo4jGraph:
                            emotional_value: float, vector: Optional[List[float]], timestamp: datetime,
                            mood: str, keywords: List[str]) -> str:
         """Transaction function to create a memory node and establish relationships"""
+        
+        
+        
+        
+        
+        
+        
         # Create memory node
         query = (
             "MATCH (p:Persona {id: $persona_id}) "
@@ -198,11 +205,7 @@ class Neo4jGraph:
                     "name: $persona_name, "
                     "profile: $persona_profile, "
                     "node_type: 'persona', "
-                    "mind: $mind, "
-                    "body: $body, "
-                    "heart: $heart, "
-                    "soul: $soul, "
-                    "will: $will, "
+                    "characteristics: $characteristics, "
                     "mood: $mood, "
                     "status: $status, "
                     "plans: $plans, "
@@ -213,13 +216,9 @@ class Neo4jGraph:
                     persona_id=persona_id,
                     persona_name=persona_name,
                     persona_profile=persona_profile,
-                    mind=char_dict.get("mind", 0),
-                    body=char_dict.get("body", 0),
-                    heart=char_dict.get("heart", 0),
-                    soul=char_dict.get("soul", 0),
-                    will=char_dict.get("will", 0),
+                    characteristics=char_dict,
                     mood="neutral",
-                    status="active",
+                    status="active", 
                     plans=[],
                     goals=[],
                     schedule=[]
@@ -421,176 +420,61 @@ class Neo4jGraph:
             for record in result
         ]
 
-    def update_persona_state(self, persona_id: str, mood: str = None, status: str = None, 
-                           plans: List[str] = None, goals: List[str] = None,
-                           characteristics: Optional[Dict[str, int] | 'Characteristics'] = None,
-                           schedule: List[str] = None) -> None:
-        """Update persona state in Neo4j
-        
-        Args:
-            persona_id: ID of the persona to update
-            mood: Current mood of the persona
-            status: Current status of the persona
-            plans: List of current plans (as complete strings)
-            goals: List of current goals
-            characteristics: Either a Characteristics object or a dict with mind, body, heart, soul, will values
-            schedule: List of current schedule items (as complete strings)
-        """
-        # Initialize set_clauses and params at the start
-        set_clauses = []
-        params = {"persona_id": persona_id}
-
-        # Convert Characteristics object to dict if needed
-        char_dict = None
-        if characteristics is not None:
-            if hasattr(characteristics, '__dict__'):
-                # It's a Characteristics object
-                char_dict = {
-                    'mind': getattr(characteristics, 'mind', 0),
-                    'body': getattr(characteristics, 'body', 0),
-                    'heart': getattr(characteristics, 'heart', 0),
-                    'soul': getattr(characteristics, 'soul', 0),
-                    'will': getattr(characteristics, 'will', 0)
-                }
-            else:
-                # It's already a dict
-                char_dict = characteristics
-
-        # Ensure plans and goals are lists of strings
-        if plans is not None:
-            if isinstance(plans, str):
-                plans = [plans]
-            # Get existing plans from Neo4j
-            existing_plans = []
+    def update_persona_state(self, persona_id, characteristics=None, mood=None, status=None, plans=None, goals=None, schedule=None):
+        """Update persona state in Neo4j."""
+        try:
+            # Convert characteristics to primitive types
+            if characteristics and isinstance(characteristics, dict):
+                characteristics = {k: int(v) if isinstance(v, (int, float)) else v 
+                                 for k, v in characteristics.items()}
+            
+            # Ensure plans, goals, and schedule are lists of strings
+            if plans is not None:
+                plans = [str(p) for p in plans] if isinstance(plans, list) else []
+            if goals is not None:
+                goals = [str(g) for g in goals] if isinstance(goals, list) else []
+            if schedule is not None:
+                schedule = [str(s) for s in schedule] if isinstance(schedule, list) else []
+            
+            # Build update query dynamically based on provided parameters
+            update_parts = []
+            params = {"persona_id": persona_id}
+            
+            if characteristics is not None:
+                update_parts.append("p.characteristics = $characteristics")
+                params["characteristics"] = characteristics
+            if mood is not None:
+                update_parts.append("p.mood = $mood")
+                params["mood"] = str(mood)
+            if status is not None:
+                update_parts.append("p.status = $status")
+                params["status"] = str(status)
+            if plans is not None:
+                update_parts.append("p.plans = $plans")
+                params["plans"] = plans
+            if goals is not None:
+                update_parts.append("p.goals = $goals")
+                params["goals"] = goals
+            if schedule is not None:
+                update_parts.append("p.schedule = $schedule")
+                params["schedule"] = schedule
+                
+            if not update_parts:
+                return  # Nothing to update
+                
+            query = f"""
+            MATCH (p:Persona {{id: $persona_id}})
+            SET {', '.join(update_parts)}
+            RETURN p
+            """
+            
             with self.driver.session() as session:
-                result = session.run(
-                    "MATCH (p:Persona {id: $persona_id}) RETURN p.plans as plans",
-                    persona_id=persona_id
-                )
-                record = result.single()
-                if record and record["plans"]:
-                    existing_plans = record["plans"]
-            
-            # Convert new plans to strings and filter empty ones
-            new_plans = [str(plan) for plan in plans if plan]
-            
-            # Combine existing and new plans
-            plans = existing_plans + new_plans
-            plans = [plan for plan in plans if plan]
-            # Add plans to set_clauses and params
-            set_clauses.append("p.plans = $plans")
-            params["plans"] = list(plans)
-
-        if goals is not None:
-            if isinstance(goals, str):
-                goals = [goals]
-            goals = [str(goal) for goal in goals if goal]  # Convert all items to strings and filter empty ones
-            # Add goals to set_clauses and params
-            set_clauses.append("p.goals = $goals")
-            params["goals"] = list(goals)
-     
-        # Handle schedule similar to plans and goals
-        if schedule is not None:
-            if isinstance(schedule, str):
-                schedule = [schedule]
-            # Convert each schedule item to string and filter empty ones
-            schedule = [str(item) for item in schedule if item]
-            # Replace existing schedule instead of appending
-            set_clauses.append("p.schedule = $schedule")
-            params["schedule"] = list(schedule)  # Convert to list to ensure it's an array in Neo4j
-
-        if mood is not None:
-            set_clauses.append("p.mood = $mood")
-            params["mood"] = mood
-
-        if status is not None:
-            set_clauses.append("p.status = $status")
-            params["status"] = status
-
-        if characteristics is not None:
-            # Store characteristics as individual properties
-            if "mind" in characteristics:
-                set_clauses.append("p.mind = $mind")
-                params["mind"] = characteristics["mind"]
-            if "body" in characteristics:
-                set_clauses.append("p.body = $body")
-                params["body"] = characteristics["body"]
-            if "heart" in characteristics:
-                set_clauses.append("p.heart = $heart")
-                params["heart"] = characteristics["heart"]
-            if "soul" in characteristics:
-                set_clauses.append("p.soul = $soul")
-                params["soul"] = characteristics["soul"]
-            if "will" in characteristics:
-                set_clauses.append("p.will = $will")
-                params["will"] = characteristics["will"]
-
-        # Only execute the update if there are changes to make
-        if set_clauses:
-            with self.driver.session() as session:
-                session.execute_write(
-                    self._update_persona_state_tx,
-                    persona_id=persona_id,
-                    mood=mood,
-                    status=status,
-                    plans=plans,
-                    goals=goals,
-                    characteristics=char_dict,
-                    schedule=schedule
-                )
-
-    @staticmethod
-    def _update_persona_state_tx(tx, persona_id: str, mood: str = None, status: str = None, 
-                                plans: List[str] = None, goals: List[str] = None,
-                                characteristics: Dict[str, int] = None,
-                                schedule: List[str] = None) -> None:
-        """Transaction function to update persona state"""
-        # Build dynamic SET clause based on provided values
-        set_clauses = []
-        params = {"persona_id": persona_id}
-        
-        if mood is not None:
-            set_clauses.append("p.mood = $mood")
-            params["mood"] = mood
-        if status is not None:
-            set_clauses.append("p.status = $status")
-            params["status"] = status
-        if plans is not None:
-            # Ensure plans are stored as complete strings in an array
-            set_clauses.append("p.plans = $plans")
-            params["plans"] = list(plans)  # Convert to list to ensure it's an array in Neo4j
-        if goals is not None:
-            # Ensure goals are stored as complete strings in an array
-            set_clauses.append("p.goals = $goals")
-            params["goals"] = list(goals)  # Convert to list to ensure it's an array in Neo4j
-        if characteristics is not None:
-            # Store characteristics as individual properties
-            if "mind" in characteristics:
-                set_clauses.append("p.mind = $mind")
-                params["mind"] = characteristics["mind"]
-            if "body" in characteristics:
-                set_clauses.append("p.body = $body")
-                params["body"] = characteristics["body"]
-            if "heart" in characteristics:
-                set_clauses.append("p.heart = $heart")
-                params["heart"] = characteristics["heart"]
-            if "soul" in characteristics:
-                set_clauses.append("p.soul = $soul")
-                params["soul"] = characteristics["soul"]
-            if "will" in characteristics:
-                set_clauses.append("p.will = $will")
-                params["will"] = characteristics["will"]
-            
-        if schedule is not None:
-            set_clauses.append("p.schedule = $schedule")
-            params["schedule"] = list(schedule)
-
-        if set_clauses:
-            query = (
-                "MATCH (p:Persona {id: $persona_id}) "
-                f"SET {', '.join(set_clauses)}"
-            )
-            tx.run(query, **params)
+                result = session.run(query, params)
+                return result.single()
+                
+        except Exception as e:
+            print(f"Error updating persona state: {str(e)}")
+            raise
 
     def get_persona_state(self, persona_id: str) -> Dict:
         """Get persona state from Neo4j
@@ -650,11 +534,11 @@ class Neo4jGraph:
             "plans": persona.get("plans", []),
             "goals": persona.get("goals", []),
             "schedule": persona.get("schedule", []),
-            "characteristics": {
-                "mind": persona.get("mind", 0),
-                "body": persona.get("body", 0),
-                "heart": persona.get("heart", 0),
-                "soul": persona.get("soul", 0),
-                "will": persona.get("will", 0)
-            }
+            "characteristics": persona.get("characteristics", {
+                "mind": 0,
+                "body": 0,
+                "heart": 0,
+                "soul": 0,
+                "will": 0
+            })
         }

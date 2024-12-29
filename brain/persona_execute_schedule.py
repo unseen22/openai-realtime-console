@@ -32,6 +32,7 @@ class PersonaExecuteSchedule:
         )
         self.embedder = Embedder()
         self.parser = MemoryParser(neo4j_graph=self.graph)
+        self.persona_scheduler = PersonaScheduler()
         print("✅ PersonaExecuteSchedule initialized successfully")
         
     def __del__(self):
@@ -57,60 +58,56 @@ class PersonaExecuteSchedule:
         """
         print("\n📅 Starting schedule processing with tracing...")
         try:
-            # Create new schedule using PersonaScheduler
-            print("🎯 Creating new schedule...")
-            persona_scheduler = PersonaScheduler()
-            schedule_result = await persona_scheduler.persona_scheduler(persona)
+            # Get schedule from persona
+            print("🎯 Processing schedule...")
+            schedule = persona["schedule"]
             
-            if not schedule_result.get("success"):
-                print("❌ Failed to generate schedule")
-                raise ValueError("Failed to generate schedule")
-                
-            schedule_data = schedule_result.get("schedule")
-            print(f"📋 Generated schedule data:\n{json.dumps(schedule_data, indent=2)}")
-
-            # Validate schedule format
-            if not isinstance(schedule_data, dict):
-                print("❌ Invalid schedule format")
-                raise ValueError("Schedule must be a dictionary")
-                
             # Process each task in the schedule
             print("\n⏳ Processing schedule tasks...")
             task_results = {}
             updated_persona = persona
             
-            if "schedule" in schedule_data and len(schedule_data["schedule"]) > 0:
-                schedule_items = schedule_data["schedule"][2:4]  # Only take items 2-4
-                for i, task in enumerate(schedule_items):  # Start enumeration from 2
-                    self.current_task_index = i + 2
-                    time_slot = task["time"]
-                    activity = task["activity"] 
-                    print(f"\n🎯 Executing task {i+1}/{len(schedule_data['schedule'])} for {time_slot}: {activity}")
-                    # Pass complete task info including time_slot
-                    result, updated_persona = self._execute_task(updated_persona, {
-                        "time": time_slot,
-                        "activity": activity,
-                        "task_number": i + 1,
-                        "total_tasks": len(schedule_items)
+            if schedule and len(schedule) > 0:
+                # Take items 2-4 from schedule
+                schedule_items = schedule
+                print(f"✅ Schedule FOUND EXECUTING")                    
+                
+            else:
+                print("⚠️ No schedule found creating a new one from persona")
+                schedule_items = await self.persona_scheduler.create_full_schedule_and_save(persona['id'])
+
+            for i, schedule_item in enumerate([schedule_items[0]]):
+                    self.current_task_index = i
+                    # Parse time and activity from schedule string (format: "time: activity")
+                    time_slot, activity = schedule_item.split(": ", 1)
+                    print(f"\n🎯 Executing task for {time_slot}: {activity}")
+                    #Pass complete task info including time_slot
+                    result, updated_persona = await self._execute_task(updated_persona, {
+                       "time": time_slot,
+                       "activity": activity,
+                       "task_number": i,
+                       "total_tasks": len(schedule_items)
                     })
                     
-                    # Mark task as completed
+                    #Mark task as completed
                     task_results[time_slot] = {
-                        "activity": activity,
-                        "result": result,
-                        "completed": True,
-                        "completion_time": datetime.now().isoformat()
+                       "activity": activity,
+                       "result": result,
+                       "completed": True,
+                       "completion_time": datetime.now().isoformat()
                     }
-                    
+
                     print(f"✅ Completed task {i+1}/{len(schedule_items)}: {activity}")
-                
+                    await self.persona_scheduler.task_manager(persona['id'], activity)
+
+            
             print("\n✅ Schedule processing completed successfully")
             # TODO: Have you Completed any plans? If yes, delete it from the plans list, or modify it.
             return {
                 "success": True,
                 "results": task_results,
                 "completed_tasks": len(task_results),
-                "total_tasks": len(schedule_data["schedule"]) if "schedule" in schedule_data else 0
+                "total_tasks": len(schedule_items)
             }, updated_persona
             
         except Exception as e:
@@ -122,7 +119,7 @@ class PersonaExecuteSchedule:
             }, persona
 
     @traceable
-    def _execute_task(self, persona, task):
+    async def _execute_task(self, persona, task):
         """
         Execute a single task from the schedule.
         
@@ -135,16 +132,15 @@ class PersonaExecuteSchedule:
         """
         print("\n📋 Executing task with tracing: {task}")
         print("🔍 Analyzing task requirements...")
-        task_actions = self.judge_task(persona, task)
+        task_actions = await self.judge_task(persona, task)
         print(f"📊 Task analysis results:\n{json.dumps(task_actions, indent=2)}")
         
         print("🎮 Choosing action strategy...")
-        action_result = self.choose_action(task_actions, task, persona)
-        time.sleep(1)
+        action_result = await self.choose_action(task_actions, task, persona)
 
         print("📝 Generating experience diary entry...")
         experience_prompt = f"""
-        You are {persona.persona_profile} and you are going to write a diary entry about completing this task: {task} with the following knowledge: {action_result}.
+        You are {persona['profile']} and you are going to write a diary entry about completing this task: {task} with the following results: {action_result}.
         Write the diary entry in a way that is consistent with your personality and characteristics, describing what actually happened.
         Return only a JSON object with:
         - diary_entry: A first-person past-tense account of completing the task, including your thoughts, feelings and reactions and details of the action.
@@ -154,7 +150,7 @@ class PersonaExecuteSchedule:
         """
 
         try:
-            groq_response = self.llm_chooser.generate_text(
+            diary_entry_done = await self.llm_chooser.generate_text(
                 provider="openai",
                 messages=[{"role": "user", "content": experience_prompt}],
                 model="gpt-4o",
@@ -164,19 +160,20 @@ class PersonaExecuteSchedule:
             )
             
             # Ensure groq_response is a dictionary
-            if isinstance(groq_response, str):
-                groq_response = json.loads(groq_response)
+            if isinstance(diary_entry_done, str):
+                diary_entry_done = json.loads(diary_entry_done)
                 
-            print(f"📔 Generated diary entry:\n{json.dumps(groq_response, indent=2)}")
+            print(f"📔 Generated diary entry:\n{json.dumps(diary_entry_done, indent=2)}")
             
             # Store memory in Neo4j
-            diary_entry = groq_response.get("diary_entry", "")
+            diary_entry = diary_entry_done.get("diary_entry", "")
             if diary_entry:
                 # Generate embedding for the diary entry
-                diary_vector = self.embedder.embed_memory(diary_entry)
-                
+                diary_vector = await self.embedder.embed_memory(diary_entry)
+                print(f"🔍 Mood return mood: {diary_entry_done.get("mood")}")
                 # Get mood and emotional value from the response
-                current_mood = groq_response.get("mood", "neutral")
+                current_mood = diary_entry_done.get("mood", "neutral")
+               
                 # Map mood to emotional value more accurately
                 emotional_mapping = {
                     "happy": 0.8,
@@ -194,8 +191,8 @@ class PersonaExecuteSchedule:
                 )
                 
                 # Create memory node in Neo4j
-                memory_id = self.graph.create_memory_node(
-                    persona_id=persona.persona_id,
+                memory_id = await self.graph.create_memory_node(
+                    persona_id=persona['id'],
                     content=diary_entry,
                     memory_type=MemoryType.EXPERIENCE.value,  # Convert enum to string
                     importance=0.7,  # Default importance for experiences
@@ -206,26 +203,32 @@ class PersonaExecuteSchedule:
                 )
                 
                 # Categorize and link topics
-                topic_ids = self.parser.categorize_memory(diary_entry)
+                topic_ids = await self.parser.categorize_memory(diary_entry)
+
+
                 if topic_ids:
-                    self.parser.link_memory_to_topics(memory_id, topic_ids)
+                    await self.parser.link_memory_to_topics(memory_id, topic_ids)
                     print("Memory categorized with topics:")
                     for topic_id in topic_ids:
                         topic_path = self.parser.get_topic_path(topic_id)
                         print(f"  - {' -> '.join(topic_path)}")
                 else:
                     print("No topics found for this memory")
-            
-            # Update persona state
-            persona.mood = groq_response.get("mood", "neutral")
-            persona.status = groq_response.get("status", "normal")
-            
+                
+                # Update persona state
+    
+                self.graph.update_persona_state(
+                    persona_id=persona['id'], 
+                    mood=diary_entry_done.get("mood", "neutral"), 
+                    status=diary_entry_done.get("status", "normal"),
+                   )
+          
             # Return a properly structured result
             task_result = {
-                "diary_entry": groq_response.get("diary_entry", ""),
-                "timestamp": groq_response.get("timestamp", datetime.now().isoformat()),
-                "mood": groq_response.get("mood", "neutral"),
-                "status": groq_response.get("status", "normal"),
+                "diary_entry": diary_entry_done.get("diary_entry", ""),
+                "timestamp": diary_entry_done.get("timestamp", datetime.now().isoformat()),
+                "mood": diary_entry_done.get("mood", "neutral"),
+                "status": diary_entry_done.get("status", "normal"),
                 "action_details": action_result
             }
             
@@ -241,7 +244,7 @@ class PersonaExecuteSchedule:
             }, persona
 
     @traceable
-    def choose_action(self, task_actions, task, persona):
+    async def choose_action(self, task_actions, task, persona):
         """
         Analyze each required action and determine if it needs knowledge gathering or simulation.
         
@@ -255,11 +258,14 @@ class PersonaExecuteSchedule:
         """
         print("\n🤔 Analyzing each required action with tracing...")
         all_results = []
-        current_mood = persona.mood if hasattr(persona, 'mood') else "neutral"
-        current_status = persona.status if hasattr(persona, 'status') else "normal"
+        current_mood = persona['mood']
+        current_status = persona['status']
+        memory = self.graph.get_persona_memories(persona['id'], limit=1)
+        print(f"🔍 Memory: {memory}")
         
         try:
-            for action in task_actions.get("required_actions", []):
+            action = task_actions.get("required_actions", [])[0] if task_actions.get("required_actions") else None
+            if action:
                 groq_prompt = f"""
                 Analyze this specific action and determine if we need to:
                 1. Gather knowledge (for tasks requiring up-to-date information, or tasks that are not concrete, or need realtime knowledge to simulate, need a decision to make, choosing films, music, activities, etc)
@@ -274,7 +280,7 @@ class PersonaExecuteSchedule:
 
                 try:
                     print(f"🔄 Getting action choice for: {action}")
-                    llm_response = self.llm_chooser.generate_text(
+                    llm_response = await self.llm_chooser.generate_text(
                         provider="openai",
                         messages=[{"role": "user", "content": groq_prompt}],
                         model="gpt-4o",
@@ -290,16 +296,17 @@ class PersonaExecuteSchedule:
                     # Execute the chosen action for this step
                     if action_choice.get("tool") == "gather_knowledge":
                         print(f"🔍 Gathering knowledge for: {action}")
-                        result = self._gather_knowledge(action, task)
+                        result_knowladge = await self._gather_knowledge(action, task)
+                        result = await self._simulate_action(action, persona=persona, current_mood=current_mood, current_status=current_status, memory=memory, result_knowladge=result_knowladge)
                     else:
                         print(f"🎮 Simulating action for: {action}")
                         roller = StoryRoller(persona)
-                        story_engine_result = roller.roll_for_outcome(action)
+                        story_engine_result = await roller.roll_for_outcome(action)
                         print(f"🎲 Roll outcome: {story_engine_result}")
                         if not isinstance(story_engine_result, str):
                             print(f"❌ Invalid roll result type: {type(story_engine_result)}")
                             story_engine_result = "failure"  # Default to failure if invalid result
-                        result = self._simulate_action(action, persona, current_mood, current_status, story_engine_result)
+                        result = await self._simulate_action(action, persona, current_mood, current_status, story_engine_result, memory)
                         current_mood = result.get("mood", current_mood)
                         current_status = result.get("status", current_status)
                     
@@ -334,7 +341,7 @@ class PersonaExecuteSchedule:
             }
 
     @traceable
-    def _gather_knowledge(self, action, task):
+    async def _gather_knowledge(self, action, task):
         """
         Gather knowledge for the task.
         
@@ -356,7 +363,7 @@ class PersonaExecuteSchedule:
 
         try:
             print("🤖 Generating search query...")
-            llm_response = self.llm_chooser.generate_text(
+            llm_response = await self.llm_chooser.generate_text(
                 provider="openai",
                 messages=[{"role": "user", "content": groq_prompt}],
                 model="gpt-4o",
@@ -370,7 +377,7 @@ class PersonaExecuteSchedule:
             
             print("🌐 Fetching information from Perplexity...")
             perplexity_instance = pt.PerplexityHandler("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")
-            perplexity_response = perplexity_instance.generate_completion(
+            perplexity_response = await perplexity_instance.generate_completion(
                 messages=[{"role": "user", "content": query_data["query"]}],
                 model="llama-3.1-sonar-large-128k-online",
                 temperature=0.5
@@ -383,13 +390,13 @@ class PersonaExecuteSchedule:
             }
             print(f"📚 Retrieved information:\n{json.dumps(knowledge_data, indent=2)}")
 
-            validation_result = self.validate_knowledge(task, knowledge_data)
+            validation_result = await self.validate_knowledge(task, knowledge_data)
             print(f"📊 Validation result:\n{json.dumps(validation_result, indent=2)}")
             
             if not validation_result["success"]:
                 print(f"⚠️ Missing details: {validation_result['missing']}")
                 print("🔄 Fetching additional information...")
-                additional_response = perplexity_instance.generate_completion(
+                additional_response = await perplexity_instance.generate_completion(
                     messages=[{"role": "user", "content": validation_result["missing"]}],
                     model="llama-3.1-sonar-large-128k-online",
                     temperature=0.5
@@ -414,7 +421,7 @@ class PersonaExecuteSchedule:
             }
 
     @traceable
-    def validate_knowledge(self, task, knowledge):
+    async def validate_knowledge(self, task, knowledge):
         """
         Validate the knowledge for the task by checking if there are sufficient concrete details.
         
@@ -444,7 +451,7 @@ class PersonaExecuteSchedule:
         
         try:
             print("🤖 Sending validation request to LLM...")
-            validation = self.llm_chooser.generate_text(
+            validation = await self.llm_chooser.generate_text(
                 provider="groq",
                 messages=[{"role": "user", "content": validation_prompt}],
                 model="llama-3.3-70b-versatile",
@@ -481,7 +488,14 @@ class PersonaExecuteSchedule:
             }
 
     @traceable
-    def _simulate_action(self, action, persona, current_mood, current_status, story_engine_result):
+    async def _simulate_action(self, 
+                         action, 
+                         persona, 
+                         current_mood, 
+                         current_status, 
+                         story_engine_result = [],  # Default to empty list if not provided
+                         memory = [],
+                         result_knowladge = []):
         """
         Simulate the action for the task.
         
@@ -493,12 +507,16 @@ class PersonaExecuteSchedule:
         """
 
         print(f"🔍 INSIDE SIMULATE ACTION with tracing")
+        # Safely get memory content
+        
+        
         groq_prompt = f"""
         You are simulating an action for a persona with these characteristics:
-        - Profile: {persona.persona_profile}
+        - Profile: {persona['profile']}
         - Current mood: {current_mood} 
         - Current status: {current_status}
-        - This is the last thing you were doing: {[memory.content for memory in persona.memories.values()][-1] if persona.memories else "Nothing"}
+        - This is the last thing you were doing: {memory[0]['memory']['content']}
+        - This is the extra information you looked up for this action: {result_knowladge}
         
         The action to simulate is: {action} with the result of the action: {story_engine_result}.
 
@@ -513,7 +531,7 @@ class PersonaExecuteSchedule:
 
         try:
             print("🤖 Simulating action with LLM...")
-            llm_response = self.llm_chooser.generate_text(
+            llm_response = await self.llm_chooser.generate_text(
                 provider="openai",
                 messages=[{"role": "user", "content": groq_prompt}],
                 model="gpt-4o",
@@ -537,7 +555,7 @@ class PersonaExecuteSchedule:
       
 
     @traceable
-    def judge_task(self, persona, task):
+    async def judge_task(self, persona, task):
         """
         Judge the task type based on the persona and task and determine execution strategy.
         
@@ -551,10 +569,10 @@ class PersonaExecuteSchedule:
         print("\n⚖️ Analyzing task requirements with tracing...")
         # Use LLM to analyze and determine task type
         groq_prompt = f"""
-        Given this activity and persona, determine the specific steps needed to complete the task in the persona's unique style.
+        Given this activity and persona, determine the specific steps needed to complete a simulation of the task in the persona's unique style.
 
         Activity: {task}
-        Persona Profile: {persona.persona_profile}
+        Persona Profile: {persona['profile']}
 
         Return only a JSON object with:
         - required_actions: Array of specific action steps for how this persona would complete the task, no more than 3 actions
@@ -571,7 +589,7 @@ class PersonaExecuteSchedule:
         
         try:
             print("🤖 Getting task analysis from LLM...")
-            llm_response = self.llm_chooser.generate_text(
+            llm_response = await self.llm_chooser.generate_text(
                 provider="openai",
                 messages=[{"role": "user", "content": groq_prompt}],
                 model="gpt-4o", 
@@ -593,6 +611,6 @@ class PersonaExecuteSchedule:
             return {
                 "type": "default",
                 "activity": task, 
-                "persona": persona.persona_name,
+                "persona": persona['name'],
                 "required_actions": ["process_activity"]
             }

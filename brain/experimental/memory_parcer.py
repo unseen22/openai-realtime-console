@@ -198,7 +198,7 @@ class MemoryParser:
         self.llm_tool = llm_tool or LLMChooser()
         self.keyword_extractor = KeywordExtractor(llm_tool=self.llm_tool)
         self.embedder = Embedder()
-    def link_memory_to_topics(self, memory_id: str, topic_ids: List[str]):
+    async def link_memory_to_topics(self, memory_id: str, topic_ids: List[str]):
         """Create relationships between a memory and its topics in Neo4j"""
         if not self.graph:
             return

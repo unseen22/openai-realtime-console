@@ -18,7 +18,7 @@ class PersonaScheduler:
         print("✅ PersonaScheduler initialized successfully")
 
     @traceable
-    async def get_plans(self, persona, memories):
+    async def get_plans(self, persona, memory):
         """Evaluate and prioritize plans for the persona based on their profile.
         
         Args:
@@ -29,7 +29,7 @@ class PersonaScheduler:
         """
         print("\n🔍 GETTING PLANS FOR PERSONA...")
         try:
-            plans = persona.plans
+            plans = persona['plans']
             if not plans:
                 print("⚠️ No plans found for persona")
                 return {
@@ -45,20 +45,20 @@ class PersonaScheduler:
             }
         
         print("\n=== PERSONA DETAILS ===")
-        print(f"👤 Profile: {persona.profile}")
+        print(f"👤 Profile: {persona['profile']}")
         print(f"📝 Plans: {json.dumps(plans, indent=2)}")
-        print(f"📜 Recent history: {memories}")
+        print(f"📜 Recent history: {memory[0]['memory']['content'] + "\n" + memory[1]['memory']['content'] + "\n" + memory[2]['memory']['content']}")
         
         plans_prompt = f"""Given this persona's profile:
-        {persona.profile}
+        {persona['profile']}
         Take into account the goals of this persona:
-        {persona.goals}
+        {persona['goals']}
         And these current plans:
         {plans}
         This is the current date:
         {datetime.now().strftime("%Y-%m-%d")}
         And these recent history:
-        {memories}
+        {memory[0]['memory']['content'] + "\n" + memory[1]['memory']['content'] + "\n" + memory[2]['memory']['content']}
 
         Please evaluate which plans are most important to prioritize today. Consider:
         1. Urgency and time-sensitivity
@@ -107,8 +107,8 @@ class PersonaScheduler:
         
         groq_prompt = f"""
         Generate a daily schedule for a persona, take into account the persona's profile and recent history and the plans to do today.
-        Persona Profile: {persona.profile}
-        Take into account the goals of this persona: {persona.goals}
+        Persona Profile: {persona['profile']}
+        Take into account the goals of this persona: {persona['goals']}
         These are the recent exeriences: {memories}
 
         Plans to do: {plans_to_use}
@@ -234,7 +234,7 @@ class PersonaScheduler:
                     {schedule_str}
                     
                     And this persona profile:
-                    {persona.profile}
+                    {persona['profile']}
 
                     And this persona earlier activities:
                     {memories}
@@ -242,7 +242,7 @@ class PersonaScheduler:
                     {modern_suggestions}
                     
                     Also remember the persona's general goals:
-                    {persona.goals}
+                    {persona['goals']}
 
                     And the plans to do today:
                     {plans_result}
@@ -285,10 +285,9 @@ class PersonaScheduler:
     async def create_full_schedule_and_save(self, persona_id):
         persona_node = self.graph.get_persona_state(persona_id=persona_id)
         memories = self.graph.get_persona_memories(persona_id=persona_id, limit=3)
-        persona = Persona(persona_node)
 
-        schedule_result = await self.persona_scheduler(persona, memories)
-        
+        schedule_result = await self.persona_scheduler(persona_node, memories)
+            
         # Extract the actual schedule array if successful
         schedule_data = schedule_result.get("schedule", {}).get("schedule", []) if schedule_result.get("success") else []
         
@@ -296,5 +295,31 @@ class PersonaScheduler:
         formatted_schedule = [f"{item['time']}: {item['activity']}" for item in schedule_data]
         
         self.graph.update_persona_state(persona_id=persona_id, schedule=formatted_schedule)
+
+        return formatted_schedule
+    
+
+    async def task_manager(self, persona_id, task_id):
+        # Get current schedule from persona state
+        print(f"🔍 Task manager called for persona_id: {persona_id} and task_id: {task_id}")
+        persona_node = self.graph.get_persona_state(persona_id=persona_id)
+        current_schedule = persona_node.get('schedule', [])
+        
+        # Remove the completed task
+        updated_schedule = [
+        task for task in current_schedule 
+        if not task.split(': ', 1)[1] == task_id
+    ]
+        
+        # Update persona state with new schedule
+        self.graph.update_persona_state(persona_id=persona_id, schedule=updated_schedule)
+        
+
+        print(f"🔍 Updated schedule after task completion: {updated_schedule}")
+        # If schedule is empty, create new full schedule
+        if not updated_schedule:
+            await self.create_full_schedule_and_save(persona_id)
+            
+        return updated_schedule
 
 

@@ -1,6 +1,8 @@
 import requests
 from typing import Optional
 from langsmith import traceable
+import asyncio
+
 
 class PerplexityHandler:
     def __init__(self, api_key: str):
@@ -13,7 +15,7 @@ class PerplexityHandler:
         self.system_prompt = "You are a helpful assistant."  # Default prompt
 
     @traceable  
-    def generate_completion(self, messages: list, model: str, temperature: float) -> str:
+    async def generate_completion(self, messages: list, model: str, temperature: float) -> str:
         """Generate chat completion using Perplexity API"""
         try:
             # Format messages to ensure alternating user/assistant with system at start
