@@ -258,6 +258,10 @@ export function ConsolePage() {
     await wavRecorder.pause();
     client.createResponse();
 
+
+
+    
+
     // Call test endpoint after stopping recording
     try {
       const response = await fetch('http://localhost:8000/test');
