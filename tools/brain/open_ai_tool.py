@@ -1,13 +1,12 @@
 import os
 from typing import Dict, Any, Optional
 from openai import AsyncOpenAI
-import openai
 from langsmith.wrappers import wrap_openai
 from langsmith import traceable
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+load_dotenv('.env')  # Specify the path to your .env file if necessary
 
 # Check if LangSmith tracing is enabled and properly configured
 LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
@@ -32,6 +31,7 @@ class OpenAITool:
     def __init__(self, api_key: Optional[str] = None):
         """Initialize OpenAITool with official OpenAI client"""
         self.api_key = api_key or self._get_api_key()
+        print(f"API Key: {self.api_key[:8]}... (truncated)")  # Verify the API key
         self.client = wrap_openai(AsyncOpenAI(api_key=self.api_key))
         self.project_name = LANGCHAIN_PROJECT
         print(f"OpenAITool initialized with project: {self.project_name}")
@@ -46,8 +46,7 @@ class OpenAITool:
 
     def _get_api_key(self) -> str:
         """Get API key from environment variable"""
-        api_key = "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"  # Replace with your OpenAI API key
-        
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable not set")
         return api_key

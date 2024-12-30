@@ -14,13 +14,17 @@ from brain.experimental.neo4j_graph import Neo4jGraph
 from brain.experimental.memory_parcer import MemoryParser
 from brain.embedder import Embedder
 from typing import Optional
+from openai import AsyncOpenAI
+from dotenv import load_dotenv
+import os
 
-
+load_dotenv()
 
 class PersonaExecuteSchedule:
     def __init__(self, neo4j_graph: Optional[Neo4jGraph] = None):
         print("🔄 Initializing PersonaExecuteSchedule...")
         self.groq = groq_tool.GroqTool()
+        self.openai_client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.llm_chooser = LLMChooser()
         self.current_task_index = 0  # Track current task
         
@@ -150,16 +154,14 @@ class PersonaExecuteSchedule:
         """
 
         try:
-            diary_entry_done = await self.llm_chooser.generate_text(
-                provider="openai",
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
                 messages=[{"role": "user", "content": experience_prompt}],
-                model="gpt-4o",
                 temperature=0.5,
                 max_tokens=1024,
                 response_format={"type": "json_object"}
             )
-            
-            # Ensure groq_response is a dictionary
+            diary_entry_done = response.choices[0].message.content
             if isinstance(diary_entry_done, str):
                 diary_entry_done = json.loads(diary_entry_done)
                 
