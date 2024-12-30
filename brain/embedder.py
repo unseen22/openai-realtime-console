@@ -3,8 +3,14 @@ from typing import List, Union
 import numpy as np
 from numpy.linalg import norm
 import json
+from openai import AsyncOpenAI
+import asyncio
+from typing import Dict, Any
+from tenacity import retry, stop_after_attempt, wait_exponential
+import os
+from dotenv import load_dotenv
 
-class Embedder:
+class Embedder2:
     """Handles creation of vector embeddings for text content"""
     
     def __init__(self, api_url: str = 'https://bge-router.sergey-750.workers.dev/api/base'):
@@ -103,31 +109,95 @@ class Embedder:
             return 0.0
             
         return float(dot_product / norm_product)
+    
 
-# Example usage
-if __name__ == "__main__":
-    embedder = Embedder()
-    try:
-        import asyncio
+class Embedder:
+    """Alternative embedder using OpenAI embeddings"""
+    
+    def __init__(self):
+        """Initialize embedder with OpenAI config"""
+        load_dotenv()  # Load environment variables
         
-        async def test():
-            # Test single text
-            text = "This is a test memory"
-            print("\nTesting single text embedding:")
-            vector = await embedder.embed_memory(text)
-            print(f"Generated vector of length {len(vector)}")
-            print(f"First few values: {vector[:5]}")
-            print(f"Non-zero elements: {np.count_nonzero(vector)}")
+        # Get API key from environment
+        self.api_key = os.getenv('OPENAI_API_KEY')
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
             
-            # Test multiple texts
-            texts = ["Memory 1", "Memory 2", "Memory 3"]
-            print("\nTesting multiple text embeddings:")
-            vectors = await embedder.get_embeddings(texts)
-            print(f"Generated {len(vectors)} vectors of length {len(vectors[0])}")
-            print(f"Sample values from first vector: {vectors[0][:5]}")
-            print(f"Non-zero elements in first vector: {np.count_nonzero(vectors[0])}")
+        self.vector_size = 1536  # OpenAI ada-002 embedding size
+        self.model = "text-embedding-ada-002"
+        self.batch_size = 100  # OpenAI recommended batch size
         
-        asyncio.run(test())
+        # Configure OpenAI client
+        self.client = AsyncOpenAI(api_key=self.api_key)
         
-    except Exception as e:
-        print(f"Error in test: {e}")
+    async def get_embeddings(self, *texts: str) -> List[List[float]]:
+        """
+        Get embeddings for multiple texts using OpenAI API
+        
+        Args:
+            texts: One or more text strings to embed
+            
+        Returns:
+            List of embedding vectors
+        """
+        if not texts:
+            return []
+            
+        try:
+            # Split into batches
+            batches = [texts[i:i+self.batch_size] for i in range(0, len(texts), self.batch_size)]
+            embeddings = []
+            
+            for batch in batches:
+                response = await self.client.embeddings.create(
+                    input=batch,
+                    model=self.model
+                )
+                batch_embeddings = [data.embedding for data in response.data]
+                embeddings.extend(batch_embeddings)
+                
+            # Verify embeddings
+            for emb in embeddings:
+                if not isinstance(emb, list) or len(emb) != self.vector_size:
+                    raise ValueError(f"Invalid embedding format: {len(emb) if isinstance(emb, list) else type(emb)}")
+                    
+            return embeddings
+            
+        except Exception as e:
+            print(f"Error getting OpenAI embeddings: {str(e)}")
+            return [[0.0] * self.vector_size for _ in texts]
+            
+    async def embed_memory(self, text: str) -> List[float]:
+        """
+        Create embedding vector for a single memory text
+        
+        Args:
+            text: Text content to embed
+            
+        Returns:
+            Embedding vector as list of floats (1536 dimensions)
+        """
+        vectors = await self.get_embeddings(text)
+        return vectors[0]
+        
+    @staticmethod 
+    def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+        """
+        Calculate cosine similarity between two vectors
+        
+        Args:
+            v1, v2: Input vectors
+            
+        Returns:
+            Cosine similarity score between 0 and 1
+        """
+        v1_array = np.array(v1)
+        v2_array = np.array(v2)
+        
+        dot_product = np.dot(v1_array, v2_array)
+        norm_product = norm(v1_array) * norm(v2_array)
+        
+        if norm_product == 0:
+            return 0.0
+            
+        return float(dot_product / norm_product)

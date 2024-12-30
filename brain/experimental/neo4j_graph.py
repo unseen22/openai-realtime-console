@@ -43,7 +43,7 @@ class Neo4jGraph:
                 "FOR (m:Memory) "
                 "ON m.vector "
                 "OPTIONS { indexConfig: { "
-                "`vector.dimensions`: 768, "  # BGE embeddings dimension
+                "`vector.dimensions`: 1536, "  # BGE embeddings dimension
                 "`vector.similarity_function`: 'cosine', "  # Cosine similarity is generally best for text embeddings
                 "`vector.quantization.enabled`: true "  # Enable quantization for better memory usage
                 "}} "

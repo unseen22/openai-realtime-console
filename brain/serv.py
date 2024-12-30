@@ -10,6 +10,12 @@ from datetime import datetime
 import tempfile
 
 from brain.experimental.neo4j_graph import Neo4jGraph
+from brain.experimental.memory_parcer import MemoryParser
+from brain.transcription import TranscriptionHandler
+
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
 
 print("\n=== Starting FastAPI Server ===")
 print("Configuring CORS...")
@@ -29,14 +35,50 @@ print("CORS configured")
 
 # Initialize Neo4j connection
 print("Initializing Neo4j connection...")
-neo4j_graph = Neo4jGraph()
+neo4j_graph = Neo4jGraph(
+    username=os.getenv("NEO4J_USER"),
+    password=os.getenv("NEO4J_PASSWORD"),
+    uri=os.getenv("NEO4J_URI")
+)
+parcer = MemoryParser(neo4j_graph)
+
 print("Neo4j connection initialized")
+
+# Initialize transcription handler
+print("Initializing transcription handler...")
+transcription_handler = TranscriptionHandler()
+print("Transcription handler initialized")
 
 @app.on_event("startup")
 async def startup_event():
+    """Initialize components on startup"""
     print("\nServer startup:")
-    print("Available routes:")
- 
+    
+    # Initialize memory parser
+    await parcer.initialize()
+    print("✓ Memory parser initialized")
+    
+    # Print available routes
+    print("\nAvailable routes:")
+    for route in app.routes:
+        if hasattr(route, "methods") and route.path != "/openapi.json":
+            methods = ", ".join(route.methods)
+            print(f"  {methods:<10} {route.path}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    print("\nServer shutdown:")
+    
+    # Close Neo4j connection
+    if neo4j_graph:
+        neo4j_graph.close()
+        print("✓ Neo4j connection closed")
+    
+    # Close any other resources
+    if transcription_handler:
+        await transcription_handler.close()
+        print("✓ Transcription handler closed")
 
 # Add static file serving
 app.mount("/static", StaticFiles(directory="public"), name="static")
@@ -181,5 +223,62 @@ async def delete_memory(persona_id: str, memory_id: str):
 
 @app.post("/memories/search")
 async def search_memories(query: str, persona_id: str = "default", top_k: int = 3):
-    """Search for similar memories - Placeholder"""
-    raise HTTPException(status_code=501, detail="Not implemented")
+    """Search for similar memories using enhanced search"""
+    try:
+        memories = await parcer.enhance_memory_search(query, persona_id, top_k)
+        if not memories:
+            return {"memories": [], "status": "success"}
+            
+        # Format the response
+        memory_responses = []
+        for memory in memories:
+            memory_responses.append({
+                "content": memory["memory"]["content"],
+                "timestamp": memory["memory"].get("timestamp", datetime.now().isoformat()),
+                "importance": memory["memory"].get("importance", 0.5),
+                "similarity": memory["similarity"],
+                "topic_relevance": memory["topic_relevance"],
+                "keyword_relevance": memory["keyword_relevance"],
+                "final_score": memory["final_score"]
+            })
+            
+        return {
+            "memories": memory_responses,
+            "status": "success"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/transcribe/local")
+async def transcribe_local(audio_file: UploadFile = File(...), persona_id: str = Query("default")):
+    """Transcribe audio and search for relevant memories"""
+    try:
+        # Read audio file
+        audio_data = await audio_file.read()
+        
+        # Transcribe audio
+        transcription = await transcription_handler.transcribe_audio(audio_data)
+        
+        # Search for relevant memories
+        memories = await parcer.enhance_memory_search(
+            query=transcription,
+            persona_id=persona_id,
+            top_k=3
+        )
+        
+        # Format memory results
+        search_results = ""
+        if memories:
+            search_results = "\n".join([
+                f"Memory: {mem['memory']['content'][:200]}... "
+                f"(Relevance: {mem['final_score']:.2f})"
+                for mem in memories
+            ])
+        
+        return {
+            "text": transcription,
+            "search_results": search_results,
+            "status": "success"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Set, Any, Tuple
+from typing import Dict, List, Optional, Set, Any, Tuple, Callable
 from datetime import datetime
 import json
 from enum import Enum
@@ -6,6 +6,11 @@ from dataclasses import dataclass
 import pathlib
 import sys
 import asyncio
+from functools import lru_cache, wraps
+from time import time
+import aiohttp
+from concurrent.futures import ThreadPoolExecutor
+import functools
 # Add parent directory to path to allow imports
 current_dir = pathlib.Path(__file__).parent
 parent_dir = str(current_dir.parent.parent)
@@ -183,6 +188,28 @@ class TopicHierarchy:
         self.topics[topic.id] = topic
         return topic
 
+def async_cache(ttl_seconds: int = 300):
+    """Custom cache decorator for async functions"""
+    cache = {}
+    
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            key = str(args) + str(kwargs)
+            now = time()
+            
+            if key in cache:
+                result, timestamp = cache[key]
+                if now - timestamp < ttl_seconds:
+                    return result
+                del cache[key]
+            
+            result = await func(*args, **kwargs)
+            cache[key] = (result, now)
+            return result
+        return wrapper
+    return decorator
+
 class MemoryParser:
     """Parses and categorizes memories into topics"""
     
@@ -198,161 +225,72 @@ class MemoryParser:
         self.llm_tool = llm_tool or LLMChooser()
         self.keyword_extractor = KeywordExtractor(llm_tool=self.llm_tool)
         self.embedder = Embedder()
-    async def link_memory_to_topics(self, memory_id: str, topic_ids: List[str]):
-        """Create relationships between a memory and its topics in Neo4j"""
-        if not self.graph:
-            print("🔍 No graph found, skipping memory linking in PARCER")
+        
+        # Optimize thread pool and connection handling
+        self._executor = ThreadPoolExecutor(max_workers=5)
+        self._session_pool = []
+        self._max_pool_size = 10
+        self._warmup_done = False
+        
+    async def initialize(self):
+        """Initialize and warm up the parser components"""
+        if self._warmup_done:
             return
-
-        with self.graph.driver.session() as session:
-            print(f"🔍 Linking memory {memory_id} to topics: {topic_ids}")
-            for topic_id in topic_ids:
-                session.execute_write(
-                    self._create_memory_topic_relationship_tx,
-                    memory_id,
-                    topic_id
-                )
-            print("🔍 Memory linked to topics successfully")
-
-    @staticmethod
-    def _create_memory_topic_relationship_tx(tx, memory_id: str, topic_id: str):
-        """Create a relationship between memory and topic in Neo4j"""
-        query = (
-            "MATCH (m:Memory), (t:Topic) "
-            "WHERE elementId(m) = $memory_id AND t.id = $topic_id "
-            "MERGE (m)-[:BELONGS_TO]->(t)"
-        )
-        tx.run(query, memory_id=memory_id, topic_id=topic_id)
-
-    async def enhance_memory_search(self, query: str, persona_id: Optional[str] = None, top_k: int = 3) -> List[Dict]:
-        """
-        Enhanced memory search combining vector similarity, topic relevance, and keyword matching
-        
-        Args:
-            query: The search query text
-            vector: The query embedding vector
-            persona_id: Optional persona ID to filter memories
-            top_k: Maximum number of results to return
             
-        Returns:
-            List of dicts containing memory data with similarity and topic relevance scores
-        """
-        if not self.graph:
-            return []
-
-        # Run topic categorization and keyword extraction concurrently
-        query_vector_future = asyncio.create_task(self.embedder.embed_memory(query))
-        topic_ids_future = asyncio.create_task(self.categorize_memory(query))
-        query_keywords_future = asyncio.create_task(self.generate_keywords(query))
+        # Initialize session pool
+        if self.graph:
+            for _ in range(min(3, self._max_pool_size)):  # Start with 3 sessions
+                self._session_pool.append(self.graph.driver.session())
         
-        # Wait for all tasks to complete
-        query_vector = await query_vector_future
-        topic_ids = await topic_ids_future
-        query_keywords = await query_keywords_future
+        # Warm up embedder with common queries
+        # warmup_texts = [
+        #     "What did I do yesterday?",
+        #     "Tell me about my day",
+        #     "My recent activities"
+        # ]
         
-        with self.graph.driver.session() as session:
-            return session.execute_read(
-                self._enhanced_memory_search_tx,
-                query_vector=query_vector,
-                topic_ids=topic_ids,
-                query_keywords=query_keywords,
-                persona_id=persona_id,
-                top_k=top_k
-            )
-
-    @staticmethod
-    def _enhanced_memory_search_tx(tx, query_vector: List[float], topic_ids: List[str], query_keywords: List[str], persona_id: Optional[str], top_k: int) -> List[Dict]:
-        """
-        Transaction function for enhanced memory search
-        Combines vector similarity with topic relevance and keyword matching
-        """
-        # First get base matches using vector index for efficient similarity search
-        base_query = (
-            "CALL db.index.vector.queryNodes('memory_vector_idx', $top_k * 3, $query_vector) "
-            "YIELD node, score "
-            "WITH node as m, score as similarity "
-            "WHERE m.vector IS NOT NULL "
-        )
-
-        # Add persona filter if needed
-        if persona_id:
-            base_query += (
-                "MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m) "
-            )
-
-        # Add topic relevance calculation
-        topic_query = base_query + (
-            "WITH m, similarity, "
-            "CASE "
-            "  WHEN $topic_ids = [] THEN 0 "
-            "  ELSE SIZE([(m)-[:BELONGS_TO]->(t:Topic) WHERE t.id IN $topic_ids | t]) "
-            "END as topic_matches "
-            "WITH m, similarity, topic_matches, "
-            "CASE "
-            "  WHEN $topic_ids = [] THEN 0 "
-            "  ELSE toFloat(topic_matches) / size($topic_ids) "
-            "END as topic_relevance "
-        )
-
-        # Add keyword relevance calculation and final scoring
-        final_query = topic_query + (
-            "WITH m, similarity, topic_relevance, "
-            "CASE "
-            "  WHEN $query_keywords = [] THEN 0 "
-            "  ELSE SIZE([k IN $query_keywords WHERE k IN m.keywords | k]) / toFloat(SIZE($query_keywords)) "
-            "END as keyword_relevance "
-            "WITH m, similarity, topic_relevance, keyword_relevance, "
-            "(similarity * 0.5 + topic_relevance * 0.25 + keyword_relevance * 0.25) as final_score "
-            "ORDER BY final_score DESC "
-            "LIMIT $top_k "
-            "RETURN m, similarity, topic_relevance, keyword_relevance, final_score"
-        )
+        # Run warmup tasks concurrently
+        # await asyncio.gather(
+        #     *[self.embedder.embed_memory(text) for text in warmup_texts],
+        #     *[self.generate_keywords(text) for text in warmup_texts]
+        # )
         
-        result = tx.run(
-            final_query,
-            query_vector=query_vector,
-            topic_ids=topic_ids or [],
-            query_keywords=query_keywords or [],
-            persona_id=persona_id,
-            top_k=top_k
-        )
+        # Warm up Neo4j connection and query plan
+        if self.graph:
+            with self.graph.driver.session() as session:
+                # Warm up index
+                session.run(
+                    "MATCH (m:Memory) WHERE m.vector IS NOT NULL "
+                    "WITH m LIMIT 1 "
+                    "RETURN m"
+                ).consume()
+                
+                # Cache topic hierarchy
+                self.topic_hierarchy._initialize_core_topics()
         
-        return [
-            {
-                "memory": dict(record["m"]),
-                "similarity": record["similarity"],
-                "topic_relevance": record["topic_relevance"],
-                "keyword_relevance": record["keyword_relevance"],
-                "final_score": record["final_score"]
-            }
-            for record in result
-        ]
+        self._warmup_done = True
+    
+    def _get_session(self):
+        """Get a session from the pool or create a new one"""
+        if not self._session_pool:
+            if self.graph and len(self._session_pool) < self._max_pool_size:
+                return self.graph.driver.session()
+            return None
+        return self._session_pool.pop()
+    
+    def _return_session(self, session):
+        """Return a session to the pool"""
+        if session and len(self._session_pool) < self._max_pool_size:
+            self._session_pool.append(session)
+        else:
+            session.close()
 
-    def get_memories_by_topic(self, topic_id: str, limit: int = 10) -> List[Dict]:
-        """Get memories associated with a specific topic"""
-        if not self.graph:
-            return []
+    @async_cache(ttl_seconds=300)
+    async def embed_memory(self, content: str) -> List[float]:
+        """Cached wrapper for memory embedding"""
+        return await self.embedder.embed_memory(content)
 
-        with self.graph.driver.session() as session:
-            return session.execute_read(
-                self._get_memories_by_topic_tx,
-                topic_id=topic_id,
-                limit=limit
-            )
-
-    @staticmethod
-    def _get_memories_by_topic_tx(tx, topic_id: str, limit: int) -> List[Dict]:
-        """Transaction function to get memories by topic"""
-        query = (
-            "MATCH (t:Topic {id: $topic_id})<-[:BELONGS_TO]-(m:Memory) "
-            "WITH m "
-            "ORDER BY m.timestamp DESC "
-            "LIMIT $limit "
-            "RETURN m"
-        )
-        result = tx.run(query, topic_id=topic_id, limit=limit)
-        return [{"memory": dict(record["m"])} for record in result]
-
+    @async_cache(ttl_seconds=300)
     async def categorize_memory(self, content: str) -> List[str]:
         """
         Analyze memory content and return relevant topic IDs
@@ -405,6 +343,180 @@ Only return the JSON array, no other text."""
             except Exception as e2:
                 print(f"Fallback categorization failed: {e2}")
                 return []
+
+    @async_cache(ttl_seconds=300)
+    async def generate_keywords(self, content: str) -> List[str]:
+        """Cached wrapper for keyword generation"""
+        return await self.keyword_extractor.extract_keywords(content)
+
+    async def link_memory_to_topics(self, memory_id: str, topic_ids: List[str]):
+        """Create relationships between a memory and its topics in Neo4j"""
+        if not self.graph:
+            print("🔍 No graph found, skipping memory linking in PARCER")
+            return
+
+        with self.graph.driver.session() as session:
+            print(f"🔍 Linking memory {memory_id} to topics: {topic_ids}")
+            for topic_id in topic_ids:
+                session.execute_write(
+                    self._create_memory_topic_relationship_tx,
+                    memory_id,
+                    topic_id
+                )
+            print("🔍 Memory linked to topics successfully")
+
+    @staticmethod
+    def _create_memory_topic_relationship_tx(tx, memory_id: str, topic_id: str):
+        """Create a relationship between memory and topic in Neo4j"""
+        query = (
+            "MATCH (m:Memory), (t:Topic) "
+            "WHERE elementId(m) = $memory_id AND t.id = $topic_id "
+            "MERGE (m)-[:BELONGS_TO]->(t)"
+        )
+        tx.run(query, memory_id=memory_id, topic_id=topic_id)
+
+    async def enhance_memory_search(self, query: str, persona_id: Optional[str] = None, top_k: int = 3) -> List[Dict]:
+        """
+        Enhanced memory search combining vector similarity, topic relevance, and keyword matching
+        with optimized parallel processing and caching
+        
+        Args:
+            query: The search query text
+            persona_id: Optional persona ID to filter memories
+            top_k: Maximum number of results to return
+            
+        Returns:
+            List of dicts containing memory data with similarity and topic relevance scores
+        """
+        if not self.graph:
+            return []
+
+        # Ensure initialization is done
+        if not self._warmup_done:
+            await self.initialize()
+
+        # Run tasks in parallel using asyncio.gather
+        query_vector, topic_ids, query_keywords = await asyncio.gather(
+            self.embed_memory(query),
+            self.categorize_memory(query),
+            self.generate_keywords(query)
+        )
+        # print(f"🔍 Query vector: {query_vector}")
+        # print(f"🔍 Topic IDs: {topic_ids}")
+        # print(f"🔍 Query keywords: {query_keywords}")
+        # Use ThreadPoolExecutor for database operations with connection pooling
+        loop = asyncio.get_event_loop()
+        session = self._get_session()
+        try:
+            results = await loop.run_in_executor(
+                self._executor,
+                lambda: session.execute_read(
+                    self._enhanced_memory_search_tx,
+                    query_vector=query_vector,
+                    topic_ids=topic_ids,
+                    query_keywords=query_keywords,
+                    persona_id=persona_id,
+                    top_k=top_k
+                )
+            )
+            return results
+        finally:
+            if session:
+                self._return_session(session)
+
+    @staticmethod
+    def _enhanced_memory_search_tx(tx, query_vector: List[float], topic_ids: List[str], 
+                                 query_keywords: List[str], persona_id: Optional[str], top_k: int) -> List[Dict]:
+        """Optimized transaction function for enhanced memory search"""
+        # Use parameterized query with optimized Neo4j query plan
+        query = """
+        CALL {
+            MATCH (m:Memory)
+            WHERE m.vector IS NOT NULL
+            WITH m, m.vector AS vec1, $query_vector AS vec2
+            WITH m, 
+                 reduce(dot = 0.0, i in range(0, size(vec1)-1) | dot + vec1[i] * vec2[i]) as dotProduct,
+                 sqrt(reduce(l2 = 0.0, i in range(0, size(vec1)-1) | l2 + vec1[i] * vec1[i])) as norm1,
+                 sqrt(reduce(l2 = 0.0, i in range(0, size(vec2)-1) | l2 + vec2[i] * vec2[i])) as norm2
+            WITH m, CASE 
+                WHEN norm1 * norm2 = 0 THEN 0 
+                ELSE abs(dotProduct / (norm1 * norm2))
+            END as similarity
+            ORDER BY similarity DESC
+            LIMIT $top_k * 3
+            RETURN m, similarity
+        }
+
+        WITH m, similarity
+        
+        // Optional persona filter
+        %s
+        
+        // Calculate topic relevance efficiently
+        WITH m, similarity,
+        CASE
+            WHEN size($topic_ids) = 0 THEN 0
+            ELSE size([(m)-[:BELONGS_TO]->(t:Topic) WHERE t.id IN $topic_ids | t]) / toFloat(size($topic_ids))
+        END as topic_relevance,
+        
+        // Calculate keyword relevance efficiently
+        CASE
+            WHEN size($query_keywords) = 0 THEN 0
+            ELSE size([k IN $query_keywords WHERE k IN m.keywords | k]) / toFloat(size($query_keywords))
+        END as keyword_relevance
+        
+        // Calculate final score and return results
+        WITH m, similarity, topic_relevance, keyword_relevance,
+        (similarity * 0.5 + topic_relevance * 0.25 + keyword_relevance * 0.25) as final_score
+        ORDER BY final_score DESC
+        LIMIT $top_k
+        RETURN m, similarity, topic_relevance, keyword_relevance, final_score
+        """ % ("MATCH (p:Persona {id: $persona_id})-[:HAS_MEMORY]->(m)" if persona_id else "")
+        
+        result = tx.run(
+            query,
+            query_vector=query_vector,
+            topic_ids=topic_ids or [],
+            query_keywords=query_keywords or [],
+            persona_id=persona_id,
+            top_k=top_k
+        )
+        
+        return [
+            {
+                "memory": dict(record["m"]),
+                "similarity": record["similarity"],
+                "topic_relevance": record["topic_relevance"],
+                "keyword_relevance": record["keyword_relevance"],
+                "final_score": record["final_score"]
+            }
+            for record in result
+        ]
+
+    def get_memories_by_topic(self, topic_id: str, limit: int = 10) -> List[Dict]:
+        """Get memories associated with a specific topic"""
+        if not self.graph:
+            return []
+
+        with self.graph.driver.session() as session:
+            return session.execute_read(
+                self._get_memories_by_topic_tx,
+                topic_id=topic_id,
+                limit=limit
+            )
+
+    @staticmethod
+    def _get_memories_by_topic_tx(tx, topic_id: str, limit: int) -> List[Dict]:
+        """Transaction function to get memories by topic"""
+        query = (
+            "MATCH (t:Topic {id: $topic_id})<-[:BELONGS_TO]-(m:Memory) "
+            "WITH m "
+            "ORDER BY m.timestamp DESC "
+            "LIMIT $limit "
+            "RETURN m"
+        )
+        result = tx.run(query, topic_id=topic_id, limit=limit)
+        return [{"memory": dict(record["m"])} for record in result]
 
     def _get_hierarchy_string(self) -> str:
         """Convert topic hierarchy to string representation for LLM prompt"""
@@ -514,14 +626,3 @@ Only return the JSON array, no other text."""
                     related.append((other_id, strength))
                     
         return sorted(related, key=lambda x: x[1], reverse=True)
-
-    async def generate_keywords(self, content: str) -> List[str]:
-        """Generate keywords for a memory.
-        
-        Args:
-            content: The text content to generate keywords from
-            
-        Returns:
-            List of keyword strings
-        """
-        return await self.keyword_extractor.extract_keywords(content)
