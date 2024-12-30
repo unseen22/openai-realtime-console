@@ -124,6 +124,7 @@ export function ConsolePage() {
     lng: -122.418137,
   });
   const [marker, setMarker] = useState<Coordinates | null>(null);
+  const [backendMessage, setBackendMessage] = useState<string>("");
 
   /**
    * Utility for formatting the timing of logs
@@ -256,6 +257,40 @@ export function ConsolePage() {
     const wavRecorder = wavRecorderRef.current;
     await wavRecorder.pause();
     client.createResponse();
+
+    // Call test endpoint after stopping recording
+    try {
+      const response = await fetch('http://localhost:8000/test');
+      const data = await response.json();
+      
+      console.log('Test connection data:', data); // Add logging of response data
+      
+      // Add test result to realtime events
+      const testEvent: RealtimeEvent = {
+        time: new Date().toISOString(),
+        source: 'server',
+        event: {
+          type: 'test_connection',
+          ...data,
+          event_id: `test-${Date.now()}`
+        }
+      };
+      setRealtimeEvents(events => [...events, testEvent]);
+    } catch (error) {
+      console.error('Error fetching test data:', error);
+      // Add error event to realtime events
+      const errorEvent: RealtimeEvent = {
+        time: new Date().toISOString(),
+        source: 'server',
+        event: {
+          type: 'error',
+          message: 'Failed to fetch test data',
+          error: String(error),
+          event_id: `error-${Date.now()}`
+        }
+      };
+      setRealtimeEvents(events => [...events, errorEvent]);
+    }
   };
 
   /**
@@ -387,6 +422,7 @@ export function ConsolePage() {
     client.updateSession({ instructions: instructions });
     // Set transcription, otherwise we don't get user transcriptions back
     client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
+    client.updateSession({ voice: 'coral' });
 
     // Add tools
     client.addTool(
@@ -508,6 +544,24 @@ export function ConsolePage() {
   }, []);
 
   /**
+   * Fetch data from backend when component mounts
+   */
+  useEffect(() => {
+    const fetchBackendMessage = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/');
+        const data = await response.json();
+        setBackendMessage(data.message);
+      } catch (error) {
+        console.error('Error fetching from backend:', error);
+        setBackendMessage('Failed to connect to backend');
+      }
+    };
+
+    fetchBackendMessage();
+  }, []);
+
+  /**
    * Render the application
    */
   return (
@@ -516,6 +570,7 @@ export function ConsolePage() {
         <div className="content-title">
           <img src="/openai-logomark.svg" />
           <span>realtime console</span>
+          <span style={{ marginLeft: '20px', color: '#0099ff' }}>{backendMessage}</span>
         </div>
         <div className="content-api-key">
           {!LOCAL_RELAY_SERVER_URL && (
