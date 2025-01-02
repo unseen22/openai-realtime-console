@@ -1,6 +1,7 @@
 from datetime import datetime
 import time
 import random
+from brain.groq_tool import GroqTool
 
 class TestConnect:
     def test_connect(self):
@@ -37,7 +38,39 @@ class TestConnect:
                 }
             }
         }
+    
+    async def analyze_emotion(self, text: str) -> dict:
+        """Analyze emotion and speech style of text using Groq"""
+        groq = GroqTool()
+        
+        prompt = f"""Analyze the following text and determine how would this persona answer:
 
+Persona Profile: Jake is a a hustel on the street a strong man.
+
+1. The emotional state (e.g. angry, happy, sad)
+2. The speech style (e.g. whisper, shout, normal)
+
+Text: {text}
+
+Return a JSON object with emotion and speech style in this format:
+{{"emotion": "[emotion]", "speech": "[style]"}}"""
+
+        try:
+            response = await groq.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            print('FUCK {response}')
+            return response["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"Error analyzing emotion: {str(e)}")
+            print('FUCK {response}')
+
+            return {
+                "emotion": "neutral", 
+                "speech": "normal"
+            }
+        
 if __name__ == "__main__":
     test_connect = TestConnect()
     print(test_connect.test_connect())

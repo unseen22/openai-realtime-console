@@ -1,6 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from tools.test_connect import TestConnect
+from pydantic import BaseModel
+
+class EmotionRequest(BaseModel):
+    text: str
 
 app = FastAPI()
 
@@ -21,6 +25,11 @@ async def root():
 async def test():
     test_connect = TestConnect()
     return test_connect.test_connect()
+
+@app.post("/analyze_emotion")
+async def analyze_emotion(request: EmotionRequest):
+    sentiment_analysis = TestConnect()
+    return sentiment_analysis.analyze_emotion(request.text)
 
 if __name__ == "__main__":
     import uvicorn

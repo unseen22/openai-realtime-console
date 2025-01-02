@@ -1,0 +1,39 @@
+[33m703ab797[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mbefore_adding_fast_api[m[33m)[m next commit before sleepy
+[33m980dff50[m working text
+[33m13e0a3d5[m working transcription
+[33m4eefda1a[m[33m ([m[1;31morigin/before_adding_fast_api[m[33m)[m latest saves. voice working
+[33me9c9f5d1[m added brain
+[33ma095f668[m now finally CORS error off
+[33mcb21f8f5[m with audio_chunkiing
+[33m6ea4dba7[m[33m ([m[1;31mupstream/websockets[m[33m, [m[1;32mwebsockets[m[33m)[m Typo fix
+[33m971323d7[m[33m ([m[1;32mnewest_tackle[m[33m)[m Update to newest api module
+[33md1d62a6d[m Var name include URL
+[33m72d41215[m Change relay server to an environment variable
+[33m851eb316[m Import from package
+[33m542356fb[m Update to add dotenv
+[33m7c5a173e[m Use the Reference Client directly from source
+[33m977a1d65[m Update package-lock.json
+[33m37d32772[m Update links
+[33m8f4a39ed[m typo fix
+[33m3f5b518e[m lint fix
+[33mc4304c49[m Merge branch 'main' of github.com:openai/openai-realtime-console
+[33m8c9d05f4[m Update to handle text-only
+[33m949a107f[m Update to handle text-only
+[33m3157798e[m Styling fix
+[33m298680f8[m Try old revision of system prompt for demo
+[33m528bed22[m ack
+[33m7dc4cd55[m syntax highlighting
+[33m58b79320[m copy
+[33m803993f8[m vibes
+[33m7fff0c00[m add acknowledgements
+[33mf3cda9ef[m Include weather
+[33m4d880a57[m Update to include weather results
+[33me6c23bfc[m Fix overflow issue
+[33maa9abeac[m remove capitalization
+[33mb778a4e6[m Update name
+[33mca90f565[m updateSession
+[33mb0d6115d[m Copy fix
+[33m80c6f588[m Update README
+[33mbca37f3d[m Updates
+[33m1838d605[m Update name / version
+[33m2cb4b781[m Initial public commit

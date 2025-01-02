@@ -26,6 +26,9 @@ import { Map } from '../components/Map';
 
 import './ConsolePage.scss';
 import { isJsxOpeningLikeElement } from 'typescript';
+import { TranscriptionService } from '../services/TranscriptionService';
+import { SentimentAnalysisService } from '../services/SentimentAnalysis';
+import { VoiceOptions, SessionConfig } from '../types/realtime';
 
 /**
  * Type for result from get_weather() function call
@@ -89,6 +92,14 @@ export function ConsolePage() {
             dangerouslyAllowAPIKeyInBrowser: true,
           }
     )
+  );
+
+  const sentimentAnalysis = useRef<SentimentAnalysisService>(
+    new SentimentAnalysisService()
+  );
+
+  const transcriptionService = useRef<TranscriptionService>(
+    new TranscriptionService()
   );
 
   /**
@@ -256,11 +267,114 @@ export function ConsolePage() {
     const client = clientRef.current;
     const wavRecorder = wavRecorderRef.current;
     await wavRecorder.pause();
-    client.createResponse();
-
-
-
     
+    // Get the recorded audio data
+    const audioData = await wavRecorder.read();
+    if (!audioData || !audioData.meanValues) {
+      console.error('No audio data available');
+      return;
+    }
+
+    // Attempt transcription
+    let transcriptionText = '';
+    try {
+      // Start timing transcription
+      const transcriptionStartTime = performance.now();
+      const transcription = await transcriptionService.current.transcribeAudio(audioData.meanValues);
+      const transcriptionEndTime = performance.now();
+      const transcriptionDuration = transcriptionEndTime - transcriptionStartTime;
+      
+      transcriptionText = transcription;
+      
+      // Add transcription to realtime events
+      const transcriptionEvent: RealtimeEvent = {
+        time: new Date().toISOString(),
+        source: 'client',
+        event: {
+          type: 'transcription',
+          text: transcription,
+          duration_ms: transcriptionDuration,
+          event_id: `transcription-${Date.now()}`
+        }
+      };
+      setRealtimeEvents(events => [...events, transcriptionEvent]);
+
+      // Log transcription timing
+      console.log(`Transcription took ${transcriptionDuration.toFixed(2)}ms`);
+      
+      // Start timing sentiment analysis
+      const sentimentStartTime = performance.now();
+      const emotion = await sentimentAnalysis.current.analyzeEmotion(transcription);
+      const sentimentEndTime = performance.now();
+      const sentimentDuration = sentimentEndTime - sentimentStartTime;
+
+      // Add sentiment timing event
+      const sentimentEvent: RealtimeEvent = {
+        time: new Date().toISOString(),
+        source: 'client',
+        event: {
+          type: 'sentiment_analysis',
+          emotion: emotion,
+          duration_ms: sentimentDuration,
+          event_id: `sentiment-${Date.now()}`
+        }
+      };
+      setRealtimeEvents(events => [...events, sentimentEvent]);
+
+      // Log sentiment timing
+      console.log(`Sentiment analysis took ${sentimentDuration.toFixed(2)}ms`);
+
+      const voice_instruction = "Answer in a soft caring voice as a young women. Answer in 1-3 sentences."
+      const updatedInstruct = voice_instruction + "Be very " + emotion.emotion + " almost in a " + emotion.speech + " ! "
+      console.log('FUCK Emotion:', emotion);
+      
+
+      // Reset emotion state
+      emotion.emotion = '';
+      emotion.speech = '';
+
+      transcriptionText = '';
+   
+
+      // Send the updated instructions
+      await client.sendUserMessageContent([
+        {
+          type: 'input_text', 
+          text:  ""
+        }
+      ]);
+
+      
+      client.sendUserMessageContent([
+        {
+          type: `input_text`,
+          text: updatedInstruct,
+          // text: `For testing purposes, I want you to list ten car brands. Number each item, e.g. "one (or whatever number you are one): the item name".`
+        },
+      ]);
+
+
+      
+      
+    } catch (error) {
+      console.error('Transcription error:', error);
+      // Add error event to realtime events
+      const errorEvent: RealtimeEvent = {
+        time: new Date().toISOString(),
+        source: 'client',
+        event: {
+          type: 'error',
+          message: 'Failed to transcribe audio',
+          error: String(error),
+          event_id: `error-${Date.now()}`
+        }
+      };
+      setRealtimeEvents(events => [...events, errorEvent]);
+    }
+    
+
+
+    // client.createResponse();
 
     // Call test endpoint after stopping recording
     try {
@@ -426,7 +540,10 @@ export function ConsolePage() {
     client.updateSession({ instructions: instructions });
     // Set transcription, otherwise we don't get user transcriptions back
     client.updateSession({ input_audio_transcription: { model: 'whisper-1' } });
-    client.updateSession({ voice: 'coral' });
+    client.updateSession({ 
+      voice: 'sage' as any,
+      temperature: 1.0,
+    });
 
     // Add tools
     client.addTool(
