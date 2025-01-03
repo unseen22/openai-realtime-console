@@ -1,20 +1,24 @@
 export class SentimentAnalysisService {
-  private static readonly GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+  private static readonly OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
   private apiKey: string;
 
   constructor() {
-    // Replace with your Groq API key
-    this.apiKey = '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';
-  }
+    // Replace with your OpenAI API key
+    this.apiKey = ''}
+
+  private profile = `Emotional State Profile: Joi
+Joi  carries an intense duality in her emotional landscape. On one hand, she's vibrant and full of energy, thriving in high-paced environments like the track or underground rave scenes. Her love for speed and rhythm reflects her hunger for adrenaline and excitement, but when life forces her to slow down, she becomes introspective. The loss of her competitive career left a scar, creating moments of self-doubt and frustration. She's quick-tempered, especially when something challenges her sense of purpose, but she's equally quick to soften, revealing a sincere, apologetic side that values her relationships deeply.
+
+Music and movement are Joi's emotional anchors. Heavy techno reminds her of her power, while lofi offers a safe, quiet escape. Though she's rebuilding confidence, she sometimes feels stuck between past dreams and present realities, making her deeply empathetic toward others who struggle with setbacks. Her small robot companion, Bebe, symbolizes her resilience—quirky, steadfast, and a constant reminder that even in chaos, there's joy to be found. Hanna's emotional growth lies in balancing her need for intensity with her ability to find peace in smaller, softer moments.`;
 
   async analyzeEmotion(text: string): Promise<any> {
     try {
       const prompt = `Analyze the following text and determine how would this persona answer:
 
-Persona Profile: Jake is a hustler on the street a strong man.
+Persona Profile: ${this.profile}
 
-1. The emotional state (e.g. angry, happy, sad)
-2. The speech style (e.g. whisper, shout, normal)
+1. The emotional state (e.g. angry, happy, sad, panic, discust, excited etc.)
+2. The speech style (e.g. whisper, shout, mumbling, incoherent, sleepy, in a hiss, etc.)
 
 Text: ${text}
 
@@ -28,18 +32,18 @@ Return a JSON object with emotion and speech style in this format:
             content: prompt
           }
         ],
-        model: "llama-3.3-70b-versatile",
-        temperature: 1.1,
+        model: "gpt-3.5-turbo",
+        temperature: 0.5,
         response_format: { type: "json_object" }
       };
 
-      console.log('Sending request to Groq API:', {
-        url: SentimentAnalysisService.GROQ_API_URL,
+      console.log('Sending request to OpenAI API:', {
+        url: SentimentAnalysisService.OPENAI_API_URL,
         prompt,
         requestBody
       });
 
-      const response = await fetch(SentimentAnalysisService.GROQ_API_URL, {
+      const response = await fetch(SentimentAnalysisService.OPENAI_API_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
@@ -50,12 +54,12 @@ Return a JSON object with emotion and speech style in this format:
 
       if (!response.ok) {
         const errorBody = await response.text();
-        console.error('Groq API error details:', {
+        console.error('OpenAI API error details:', {
           status: response.status,
           statusText: response.statusText,
           body: errorBody
         });
-        throw new Error(`Groq API failed: ${response.status} ${response.statusText} - ${errorBody}`);
+        throw new Error(`OpenAI API failed: ${response.status} ${response.statusText} - ${errorBody}`);
       }
 
       const result = await response.json();
